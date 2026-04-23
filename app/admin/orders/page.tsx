@@ -2,8 +2,10 @@
 import { useState, useEffect } from "react";
 import { 
   Search, FileDown, Filter, ChevronLeft, ChevronRight, 
-  Info, Clock, Camera, X
+  Info, Clock, Camera, X, Trash2
 } from "lucide-react";
+import { db } from "@/lib/firebase";
+import { doc, deleteDoc } from "firebase/firestore";
 
 export default function OrderHistoryPage() {
   const [isLoaded, setIsLoaded] = useState(false);
@@ -67,6 +69,20 @@ export default function OrderHistoryPage() {
     }
   };
 
+  // LOGIKA MENGHAPUS PESANAN (HANYA UNTUK STATUS CANCELLED)
+  const handleDeleteOrder = async (orderId: string, invoiceId: string) => {
+    if (confirm(`Apakah Anda yakin ingin menghapus pesanan ${invoiceId} secara permanen? Data yang dihapus tidak dapat dikembalikan.`)) {
+      try {
+        await deleteDoc(doc(db, "orders", orderId));
+        alert(`Pesanan ${invoiceId} berhasil dihapus.`);
+        fetchOrders(); // Refresh tabel setelah dihapus
+      } catch (error) {
+        alert("Terjadi kesalahan saat menghapus data.");
+        console.error(error);
+      }
+    }
+  };
+
   // LOGIKA PENCARIAN & FILTER STATUS
   const filteredOrders = orders.filter(order => {
     const matchSearch = order.invoice?.toLowerCase().includes(searchTerm.toLowerCase()) || order.customerName?.toLowerCase().includes(searchTerm.toLowerCase());
@@ -76,6 +92,7 @@ export default function OrderHistoryPage() {
     if (statusFilter === "Selesai") targetStatus = "completed";
     if (statusFilter === "Proses") targetStatus = "active";
     if (statusFilter === "Menunggu") targetStatus = "pending";
+    if (statusFilter === "Batal") targetStatus = "cancelled";
 
     const matchStatus = statusFilter === "Semua" || order.status === targetStatus;
     
@@ -155,6 +172,7 @@ export default function OrderHistoryPage() {
             <option value="Menunggu">Menunggu</option>
             <option value="Proses">Proses</option>
             <option value="Selesai">Selesai</option>
+            <option value="Batal">Batal</option>
           </select>
 
           <button onClick={fetchOrders} className="flex items-center gap-1.5 px-3 py-2 border border-blue-200 bg-blue-50 rounded-lg text-[13px] font-bold text-blue-600 hover:bg-blue-100 whitespace-nowrap active:scale-95 transition-all">
@@ -178,13 +196,14 @@ export default function OrderHistoryPage() {
                 <th className="px-4 py-3 text-[10px] font-black text-emerald-600 uppercase tracking-widest text-right">Owner</th>
                 <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Status</th>
                 <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Bukti</th>
+                <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Aksi</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               
               {isLoading ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-12 text-center">
+                  <td colSpan={10} className="px-4 py-12 text-center">
                     <Clock size={28} className="animate-spin text-slate-300 mx-auto mb-3" />
                     <p className="text-sm font-medium text-slate-500">Memuat data dari database...</p>
                   </td>
@@ -193,7 +212,7 @@ export default function OrderHistoryPage() {
               
               paginatedOrders.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-12 text-center">
+                  <td colSpan={10} className="px-4 py-12 text-center">
                     <Search size={32} className="text-slate-300 mx-auto mb-3" />
                     <p className="text-sm font-medium text-slate-500">Pesanan tidak ditemukan.</p>
                   </td>
@@ -203,7 +222,6 @@ export default function OrderHistoryPage() {
               (
                 paginatedOrders.map((order, index) => (
                   <tr key={order.id} className="hover:bg-slate-50/80 transition-colors group">
-                    {/* Hitung nomor urut yang benar berdasarkan halaman */}
                     <td className="px-4 py-3 text-[13px] font-medium text-slate-400">
                       {(currentPage - 1) * itemsPerPage + index + 1}
                     </td>
@@ -240,6 +258,20 @@ export default function OrderHistoryPage() {
                           title="Lihat Bukti Foto"
                         >
                           <Camera size={16} />
+                        </button>
+                      ) : (
+                        <span className="text-[10px] font-medium text-slate-400">-</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      {/* TOMBOL HAPUS (HANYA MUNCUL JIKA STATUS BATAL) */}
+                      {order.status === 'cancelled' ? (
+                        <button 
+                          onClick={() => handleDeleteOrder(order.id, order.invoice)}
+                          className="p-1.5 text-rose-600 bg-rose-50 border border-rose-100 hover:bg-rose-100 hover:text-rose-700 rounded-lg transition-all shadow-sm mx-auto flex active:scale-95"
+                          title="Hapus Pesanan"
+                        >
+                          <Trash2 size={16} />
                         </button>
                       ) : (
                         <span className="text-[10px] font-medium text-slate-400">-</span>

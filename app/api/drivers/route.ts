@@ -46,13 +46,17 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     if (!body.code || !body.name) {
-      return NextResponse.json({ success: false, error: "Kode dan Nama Driver wajib diisi" }, { status: 400 });
+      return NextResponse.json({ success: false, error: "Username dan Nama wajib diisi" }, { status: 400 });
     }
+    
     const docRef = await addDoc(collection(db, "drivers"), {
       ...body,
+      // Memastikan username huruf kecil & tanpa spasi
+      code: body.code.toLowerCase().replace(/\s/g, ''), 
       status: "aktif",
       createdAt: new Date().toISOString()
     });
+    
     return NextResponse.json({ success: true, id: docRef.id });
   } catch (error: any) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });

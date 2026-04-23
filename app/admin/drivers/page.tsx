@@ -9,18 +9,16 @@ export default function DriverManagementPage() {
   const [isLoaded, setIsLoaded] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   
-  // STATE UNTUK DATA BACKEND
   const [drivers, setDrivers] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // STATE UNTUK TAMBAH MITRA
+  // KEMBALIKAN STATE CODE (USERNAME)
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [newDriver, setNewDriver] = useState({
     code: "", name: "", phone: "", vehicle: "", area: ""
   });
 
-  // FUNGSI TARIK DATA DARI API
   const fetchDrivers = async () => {
     setIsLoading(true);
     try {
@@ -41,11 +39,10 @@ export default function DriverManagementPage() {
     fetchDrivers();
   }, []);
 
-  // FUNGSI SIMPAN DRIVER BARU
   const handleAddDriver = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newDriver.code || !newDriver.name) {
-      alert("Kode Akun dan Nama wajib diisi!");
+    if (!newDriver.code || !newDriver.name || !newDriver.phone) {
+      alert("Username, Nama, dan No WhatsApp wajib diisi!");
       return;
     }
 
@@ -59,10 +56,10 @@ export default function DriverManagementPage() {
       const result = await res.json();
       
       if (result.success) {
-        alert("Mitra baru berhasil ditambahkan!");
+        alert(`Mitra baru berhasil ditambahkan!\nUsername Driver: ${newDriver.code}`);
         setIsAddModalOpen(false);
-        setNewDriver({ code: "", name: "", phone: "", vehicle: "", area: "" }); // Reset form
-        fetchDrivers(); // Refresh data
+        setNewDriver({ code: "", name: "", phone: "", vehicle: "", area: "" });
+        fetchDrivers();
       } else {
         alert("Gagal menyimpan: " + result.error);
       }
@@ -90,7 +87,6 @@ export default function DriverManagementPage() {
   return (
     <div className={`max-w-[1400px] mx-auto pb-20 transition-all duration-700 ${isLoaded ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}>
       
-      {/* HEADER PAGE */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 mt-2 border-b border-slate-200 pb-5">
         <div>
           <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Manajemen Armada & Driver</h2>
@@ -104,23 +100,18 @@ export default function DriverManagementPage() {
             <RefreshCw size={16} className={isLoading ? "animate-spin" : ""} /> Segarkan
           </button>
           
-          {/* TOMBOL TAMBAH MITRA AKTIF */}
-          <button 
-            onClick={() => setIsAddModalOpen(true)}
-            className="bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 px-5 rounded-xl shadow-sm transition-all active:scale-95 flex items-center gap-2 text-sm"
-          >
+          <button onClick={() => setIsAddModalOpen(true)} className="bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 px-5 rounded-xl shadow-sm transition-all active:scale-95 flex items-center gap-2 text-sm">
             <Plus size={16} /> Tambah Mitra
           </button>
         </div>
       </div>
 
-      {/* FILTER BAR */}
       <div className="bg-white border border-slate-200 rounded-xl p-3 mb-6 flex flex-col md:flex-row items-center justify-between shadow-sm gap-3">
         <div className="relative w-full md:w-96">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
           <input 
             type="text" 
-            placeholder="Cari nama driver, kode akun, atau plat..." 
+            placeholder="Cari nama driver, username, atau plat..." 
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all text-sm font-medium"
@@ -131,7 +122,6 @@ export default function DriverManagementPage() {
         </div>
       </div>
 
-      {/* STATE LOADING */}
       {isLoading ? (
         <div className="flex flex-col items-center justify-center py-20">
           <RefreshCw size={40} className="animate-spin text-blue-500 mb-4" />
@@ -139,22 +129,17 @@ export default function DriverManagementPage() {
         </div>
       ) : 
       
-      /* STATE KOSONG */
       filteredDrivers.length === 0 ? (
         <div className="bg-white rounded-3xl border border-slate-200 p-16 text-center shadow-sm">
           <Car size={48} className="text-slate-300 mx-auto mb-4" />
           <h3 className="text-lg font-bold text-slate-700 mb-1">Belum Ada Mitra / Tidak Ditemukan</h3>
           <p className="text-slate-500 text-sm mb-6">Anda belum mendaftarkan driver atau pencarian tidak cocok.</p>
-          <button 
-            onClick={() => setIsAddModalOpen(true)}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-xl shadow-sm transition-all active:scale-95 flex items-center gap-2 text-sm mx-auto"
-          >
+          <button onClick={() => setIsAddModalOpen(true)} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-xl shadow-sm transition-all active:scale-95 flex items-center gap-2 text-sm mx-auto">
             <Plus size={16} /> Daftarkan Driver Pertama Anda
           </button>
         </div>
       ) : 
 
-      /* GRID KARTU DRIVER DINAMIS */
       (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
           {filteredDrivers.map((driver) => {
@@ -217,12 +202,6 @@ export default function DriverManagementPage() {
                       <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-0.5 block">Total Omzet</span>
                     </div>
                   </div>
-
-                  <div className="text-center bg-blue-50/50 rounded-lg py-2 border border-blue-100">
-                    <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">
-                      Jatah Komisi Sistem: <span className="font-black">Rp {(driver.ownerCommission || 0).toLocaleString('id-ID')}</span>
-                    </span>
-                  </div>
                 </div>
               </div>
             );
@@ -230,9 +209,7 @@ export default function DriverManagementPage() {
         </div>
       )}
 
-      {/* ========================================================= */}
       {/* MODAL POP-UP TAMBAH MITRA DRIVER */}
-      {/* ========================================================= */}
       {isAddModalOpen && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in zoom-in duration-300">
           <div className="bg-white rounded-[2rem] shadow-2xl max-w-lg w-full relative overflow-hidden flex flex-col">
@@ -250,8 +227,8 @@ export default function DriverManagementPage() {
             <form onSubmit={handleAddDriver} className="p-6 space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 ml-1">Kode Login Akun <span className="text-rose-500">*</span></label>
-                  <input required type="text" placeholder="Contoh: 05 atau budi123" value={newDriver.code} onChange={(e) => setNewDriver({...newDriver, code: e.target.value})} className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:bg-white focus:border-blue-500 text-sm font-bold" />
+                  <label className="text-xs font-bold text-slate-700 ml-1">Username Driver <span className="text-rose-500">*</span></label>
+                  <input required type="text" placeholder="Contoh: budi_cepat" value={newDriver.code} onChange={(e) => setNewDriver({...newDriver, code: e.target.value})} className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:bg-white focus:border-blue-500 text-sm font-bold" />
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold text-slate-700 ml-1">No. WhatsApp <span className="text-rose-500">*</span></label>
@@ -281,11 +258,9 @@ export default function DriverManagementPage() {
                 </button>
               </div>
             </form>
-
           </div>
         </div>
       )}
-
     </div>
   );
 }

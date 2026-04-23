@@ -9,7 +9,8 @@ export default function DriverDashboard() {
   const [isOnline, setIsOnline] = useState(false);
   const [activeOrder, setActiveOrder] = useState<any>(null);
   
-  // STATE BARU UNTUK DOMPET & STATISTIK DRIVER
+  // STATE PROFIL & STATISTIK DRIVER
+  const [driverName, setDriverName] = useState<string>("");
   const [completedCount, setCompletedCount] = useState(0);
   const [dailyRevenue, setDailyRevenue] = useState(0);
   
@@ -17,21 +18,33 @@ export default function DriverDashboard() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [driverCode, setDriverCode] = useState<string>("");
 
-  // STATE UNTUK FOTO BUKTI
   const [proofFile, setProofFile] = useState<File | null>(null);
   const [proofPreview, setProofPreview] = useState<string | null>(null);
 
   useEffect(() => {
-    // Ambil data sesi login dari browser
     const session = localStorage.getItem("mtm_user");
     if (session) {
       setDriverCode(session);
+      
+      // 💡 DAYA INGAT: Cek apakah sebelumnya driver sedang online?
+      const savedOnlineStatus = localStorage.getItem(`mtm_online_${session}`);
+      if (savedOnlineStatus === "true") {
+        setIsOnline(true);
+      }
     } else {
       window.location.href = "/";
     }
   }, []);
 
-  // FUNGSI KELUAR AKUN (LOGOUT)
+  // 💡 DAYA INGAT: Simpan status setiap kali tombol power ditekan
+  const toggleOnline = () => {
+    const newStatus = !isOnline;
+    setIsOnline(newStatus);
+    if (driverCode) {
+      localStorage.setItem(`mtm_online_${driverCode}`, newStatus.toString());
+    }
+  };
+
   const handleLogout = () => {
     if (isOnline) {
       alert("Harap matikan tombol Power (Offline) terlebih dahulu sebelum keluar!");
@@ -40,45 +53,42 @@ export default function DriverDashboard() {
     
     if (confirm("Apakah Anda yakin ingin keluar dari akun Driver?")) {
       localStorage.removeItem("mtm_user");
-      window.location.href = "/"; // Kembali ke halaman Login
+      // Opsional: Hapus ingatan online saat logout
+      if (driverCode) localStorage.removeItem(`mtm_online_${driverCode}`);
+      window.location.href = "/"; 
     }
   };
 
-  // FUNGSI TARIK DATA & HITUNG DOMPET DRIVER
+  // FUNGSI TARIK DATA 100% REAL-TIME DARI DATABASE
   const fetchActiveOrder = async () => {
     if (!isOnline || !driverCode) return;
     
     setIsLoadingOrder(true);
     try {
-      const res = await fetch(`/api/driver/orders?driverCode=${driverCode}`);
-      const result = await res.json();
+      const resOrder = await fetch(`/api/driver/orders?driverCode=${driverCode}`);
+      const resultOrder = await resOrder.json();
       
-      if (result.success) {
-        const allOrders = result.data;
-
-        // 1. Cari pesanan yang sedang aktif/pending untuk dikerjakan di layar utama
+      if (resultOrder.success) {
+        const allOrders = resultOrder.data;
         const currentActive = allOrders.find((o:any) => o.status === 'pending' || o.status === 'active');
         setActiveOrder(currentActive || null);
+      }
 
-        // 2. Filter pesanan yang sudah 'completed' (Selesai)
-        const completedOrders = allOrders.filter((o:any) => o.status === 'completed');
-        setCompletedCount(completedOrders.length);
-
-        // 3. Hitung Pendapatan Bersih Driver
-        let totalIncome = 0;
-        completedOrders.forEach((o:any) => {
-          let ownerCut = 0;
-          if (o.commissionTier === 'ringan') ownerCut = o.totalPrice * 0.30; 
-          else if (o.commissionTier === 'sedang') ownerCut = o.totalPrice * 0.20; 
-          else if (o.commissionTier === 'berat') ownerCut = o.totalPrice * 0.10;  
+      const resProfile = await fetch("/api/drivers");
+      const resultProfile = await resProfile.json();
+      
+      if (resultProfile.success) {
+        const myProfile = resultProfile.data.find((d: any) => d.code === driverCode);
+        if (myProfile) {
+          setDriverName(myProfile.name);
+          setCompletedCount(myProfile.completedOrders || 0);
           
-          totalIncome += (o.totalPrice - ownerCut);
-        });
-        
-        setDailyRevenue(totalIncome);
+          const myIncome = (myProfile.totalRevenue || 0) - (myProfile.ownerCommission || 0);
+          setDailyRevenue(myIncome);
+        }
       }
     } catch (error) {
-      console.error("Gagal mengambil pesanan:", error);
+      console.error("Gagal mengambil data:", error);
     } finally {
       setIsLoadingOrder(false);
     }
@@ -96,7 +106,6 @@ export default function DriverDashboard() {
   }, [isOnline, driverCode]);
 
 
-  // FUNGSI HANDLE FOTO SAAT KAMERA/GALERI DIPILIH
   const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
@@ -118,7 +127,6 @@ export default function DriverDashboard() {
 
     try {
       if (newStatus === 'completed' && proofFile) {
-        // GANTI BAGIAN INI DENGAN DATA CLOUDINARY ANDA
         const CLOUD_NAME = "dwprlhbzb"; 
         const UPLOAD_PRESET = "mtm-mlg";  
 
@@ -139,7 +147,6 @@ export default function DriverDashboard() {
         }
       }
 
-      // UPDATE KE FIREBASE
       const res = await fetch('/api/driver/orders/update', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -175,7 +182,6 @@ export default function DriverDashboard() {
   return (
     <div className="max-w-[1200px] mx-auto animate-in fade-in duration-500">
       
-      {/* HEADER PROFIL & TOGGLE ONLINE */}
       <div className="bg-white rounded-3xl p-6 md:p-8 shadow-sm border border-slate-200 mb-6 flex flex-col md:flex-row md:items-center justify-between gap-6 relative overflow-hidden">
         <div className={`absolute -top-24 -right-10 w-64 h-64 rounded-full blur-3xl opacity-10 transition-colors duration-700 pointer-events-none ${isOnline ? 'bg-emerald-500' : 'bg-slate-400'}`}></div>
 
@@ -185,7 +191,7 @@ export default function DriverDashboard() {
           </div>
           <div>
             <h2 className="font-extrabold text-slate-800 text-xl md:text-2xl leading-tight capitalize">
-              {driverCode === "01" ? "Ahmad Riyadi" : driverCode === "02" ? "Budi Santoso" : `Driver ${driverCode}`}
+              {driverName || `Driver ${driverCode}`}
             </h2>
             <p className="text-xs md:text-sm font-semibold text-slate-500 flex items-center gap-1.5">
               Kode Akun: <span className="uppercase text-blue-600 font-bold">{driverCode}</span>
@@ -202,9 +208,8 @@ export default function DriverDashboard() {
             {isOnline ? "ONLINE" : "OFFLINE"}
           </div>
 
-          {/* TOMBOL POWER (ONLINE/OFFLINE) */}
           <button 
-            onClick={() => setIsOnline(!isOnline)}
+            onClick={toggleOnline}
             className={`w-12 h-12 md:w-14 md:h-14 rounded-2xl flex items-center justify-center shadow-md transition-all duration-300 active:scale-95 shrink-0 ${
               isOnline ? "bg-emerald-500 hover:bg-emerald-600 text-white shadow-emerald-500/30" : "bg-slate-800 hover:bg-slate-900 text-white"
             }`}
@@ -213,7 +218,6 @@ export default function DriverDashboard() {
             <Power size={24} strokeWidth={2.5} />
           </button>
 
-          {/* TOMBOL KELUAR AKUN (LOGOUT) */}
           <button 
             onClick={handleLogout}
             className="w-12 h-12 md:w-14 md:h-14 rounded-2xl flex items-center justify-center shadow-sm transition-all duration-300 active:scale-95 shrink-0 bg-white border border-slate-200 text-rose-500 hover:bg-rose-50 hover:border-rose-200 hover:text-rose-600"
@@ -227,7 +231,6 @@ export default function DriverDashboard() {
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         
-        {/* KOLOM KIRI: STATISTIK & PENDAPATAN */}
         <div className="lg:col-span-5 space-y-6">
           <div className="bg-slate-900 rounded-3xl p-6 md:p-8 text-white shadow-lg relative overflow-hidden">
             <div className="absolute top-0 right-0 w-40 h-40 bg-blue-500/20 rounded-bl-full blur-2xl"></div>
@@ -255,13 +258,11 @@ export default function DriverDashboard() {
           </div>
         </div>
 
-        {/* KOLOM KANAN: RADAR PESANAN MASUK */}
         <div className="lg:col-span-7">
           <div className="flex items-center justify-between mb-4 px-1">
             <h3 className="text-base md:text-lg font-bold text-slate-800 uppercase tracking-widest">Radar Pesanan</h3>
           </div>
           
-          {/* STATE 1: OFFLINE */}
           {!isOnline && (
             <div className="bg-slate-100/50 border-2 border-dashed border-slate-200 rounded-3xl p-10 flex flex-col items-center justify-center text-center min-h-[300px]">
               <div className="bg-white p-4 rounded-full mb-4 shadow-sm border border-slate-100">
@@ -272,7 +273,6 @@ export default function DriverDashboard() {
             </div>
           )}
 
-          {/* STATE 2: MENCARI PESANAN */}
           {isOnline && isLoadingOrder && !activeOrder && (
              <div className="bg-blue-50/50 border border-blue-100 rounded-3xl p-10 flex flex-col items-center justify-center text-center min-h-[300px]">
                 <div className="relative mb-6">
@@ -285,7 +285,6 @@ export default function DriverDashboard() {
              </div>
           )}
 
-          {/* STATE 3: KOSONG (MENUNGGU) */}
           {isOnline && !isLoadingOrder && !activeOrder && (
             <div className="bg-blue-50/50 border border-blue-100 rounded-3xl p-10 flex flex-col items-center justify-center text-center min-h-[300px]">
               <div className="relative mb-6">
@@ -299,7 +298,6 @@ export default function DriverDashboard() {
             </div>
           )}
 
-          {/* STATE 4: ADA PESANAN MASUK DARI DATABASE */}
           {isOnline && activeOrder && (
             <div className={`rounded-3xl border-2 shadow-lg overflow-hidden animate-in slide-in-from-bottom-6 duration-500 ${activeOrder.status === 'pending' ? 'bg-white border-amber-400 shadow-amber-400/20' : 'bg-white border-emerald-500 shadow-emerald-500/20'}`}>
               
