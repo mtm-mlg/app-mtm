@@ -1,29 +1,34 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { 
   LayoutDashboard, PlusCircle, ClipboardList, 
-  Car, Settings, Search, Bell
+  Car, Settings, Search, Bell, LogOut
 } from "lucide-react";
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const [isDesktop, setIsDesktop] = useState(true);
   const pathname = usePathname();
+  const router = useRouter();
 
   useEffect(() => {
     const handleResize = () => {
       setIsDesktop(window.innerWidth >= 768);
     };
-    
-    // Set awal saat komponen dimuat
     handleResize();
-    
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  // DAFTAR MENU PORTAL OWNER
+  // FUNGSI LOGOUT (Menghapus Sesi & Kembali ke Login)
+  const handleLogout = () => {
+    if (confirm("Apakah Anda yakin ingin keluar dari Portal Owner?")) {
+      localStorage.removeItem("mtm_user");
+      router.push("/");
+    }
+  };
+
   const menuItems = [
     { name: "Beranda", icon: LayoutDashboard, path: "/admin" },
     { name: "Order Baru", icon: PlusCircle, path: "/admin/orders/new" },
@@ -32,19 +37,17 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     { name: "Setelan", icon: Settings, path: "/admin/settings" },
   ];
 
-  // FUNGSI CEK MENU AKTIF (DI PERBAIKI)
   const checkIsActive = (itemPath: string) => {
     if (itemPath === '/admin') {
       return pathname === '/admin';
     } else if (itemPath === '/admin/orders') {
-      return pathname === '/admin/orders'; // Harus sama persis agar tidak tabrakan dengan /orders/new
+      return pathname === '/admin/orders';
     } else {
       return pathname.startsWith(itemPath);
     }
   };
 
   return (
-    // Pengaman utama anti-gepeng/nabrak ke samping (overflow-x-hidden w-full)
     <div className="flex h-screen bg-slate-50 text-slate-800 font-sans overflow-hidden w-full">
       
       {/* ========================================== */}
@@ -65,7 +68,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto no-scrollbar">
             {menuItems.map((item) => {
               const isActive = checkIsActive(item.path);
-              
               return (
                 <Link key={item.name} href={item.path}>
                   <div className={`flex items-center px-4 py-3.5 rounded-xl transition-all duration-300 group ${isActive ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" : "hover:bg-blue-50 text-slate-500 hover:text-blue-700 font-semibold"}`}>
@@ -76,6 +78,17 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               );
             })}
           </nav>
+
+          {/* TOMBOL LOGOUT UNTUK LAPTOP */}
+          <div className="p-4 border-t border-slate-100">
+            <button 
+              onClick={handleLogout}
+              className="w-full flex items-center px-4 py-3.5 rounded-xl text-rose-500 hover:bg-rose-50 hover:text-rose-600 font-bold transition-all duration-300 group"
+            >
+              <LogOut size={20} strokeWidth={2.5} className="shrink-0 mr-3 group-hover:-translate-x-1 transition-transform" />
+              <span className="text-[14px]">Keluar Akun</span>
+            </button>
+          </div>
         </aside>
       )}
 
@@ -84,7 +97,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       {/* ========================================== */}
       <div className="flex-1 flex flex-col relative overflow-hidden w-full max-w-full">
         
-        {/* Latar Belakang Abstrak (Hanya Laptop) */}
         {isDesktop && (
           <>
             <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-blue-400/10 blur-[120px] pointer-events-none"></div>
@@ -119,7 +131,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               <span className="absolute top-2 right-2 md:top-2.5 md:right-2.5 h-2 w-2 md:h-2.5 md:w-2.5 bg-rose-500 rounded-full border-2 border-white animate-pulse"></span>
             </button>
             
-            <div className="h-10 w-10 md:h-12 md:w-12 rounded-xl md:rounded-2xl bg-gradient-to-tr from-slate-800 to-slate-900 flex items-center justify-center text-white font-black text-xs md:text-sm shadow-md cursor-pointer border-2 border-white">
+            <div 
+              onClick={!isDesktop ? handleLogout : undefined} // HP bisa tekan profil untuk keluar
+              className="h-10 w-10 md:h-12 md:w-12 rounded-xl md:rounded-2xl bg-gradient-to-tr from-slate-800 to-slate-900 flex items-center justify-center text-white font-black text-xs md:text-sm shadow-md cursor-pointer border-2 border-white"
+              title={!isDesktop ? "Ketuk untuk Keluar" : "Profil"}
+            >
               OW
             </div>
           </div>
@@ -137,7 +153,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           <nav className="fixed bottom-0 left-0 w-full bg-white border-t border-slate-200 flex justify-between items-center z-[100] shadow-[0_-10px_20px_rgba(0,0,0,0.04)] pb-safe pt-2 px-2 sm:px-4">
             {menuItems.map((item) => {
               const isActive = checkIsActive(item.path);
-              
               return (
                 <Link key={item.name} href={item.path} className="flex flex-col items-center justify-center flex-1 py-1 min-w-[60px] active:scale-95 transition-transform">
                   <div className={`p-1.5 rounded-xl transition-all duration-300 ${isActive ? "bg-blue-100 text-blue-600 shadow-inner" : "text-slate-400 hover:text-slate-600"}`}>

@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { 
   User, MapPin, Package, Clock, Car, 
   ArrowRight, ShieldCheck, Phone, Map, 
@@ -8,12 +9,29 @@ import {
 
 export default function NewOrderPage() {
   const [isLoaded, setIsLoaded] = useState(false);
+  const router = useRouter();
   
+  // STATE UNTUK DAFTAR DRIVER DINAMIS DARI DATABASE
+  const [availableDrivers, setAvailableDrivers] = useState<any[]>([]);
+
   useEffect(() => {
     setIsLoaded(true);
+    // Tarik daftar driver saat halaman dimuat
+    const fetchDrivers = async () => {
+      try {
+        const res = await fetch("/api/drivers");
+        const result = await res.json();
+        if (result.success) {
+          setAvailableDrivers(result.data);
+        }
+      } catch (error) {
+        console.error("Gagal menarik data driver:", error);
+      }
+    };
+    fetchDrivers();
   }, []);
 
-  // STATE INFO PELANGGAN (Baru Ditambahkan)
+  // STATE INFO PELANGGAN
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
 
@@ -95,7 +113,6 @@ export default function NewOrderPage() {
   // FUNGSI SUBMIT KE FIREBASE BACKEND
   // ========================================================
   const submitOrder = async () => {
-    // 1. Validasi Input Wajib
     if (!customerName || !customerPhone || !customServiceName || !basePrice) {
       alert("Peringatan: Nama Pelanggan, Nomor WA, Nama Jasa, dan Tarif Dasar wajib diisi!");
       return;
@@ -104,7 +121,6 @@ export default function NewOrderPage() {
     setIsSubmitting(true);
 
     try {
-      // 2. Siapkan Data yang akan dikirim (Payload)
       const orderData = {
         customerName,
         customerPhone,
@@ -123,7 +139,6 @@ export default function NewOrderPage() {
         totalPrice: totalHarga,
       };
 
-      // 3. Tembak API Route
       const res = await fetch("/api/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -133,15 +148,8 @@ export default function NewOrderPage() {
       const response = await res.json();
 
       if (response.success) {
-        alert(`Pesanan Berhasil Dibuat!\nNomor Invoice: ${response.invoice}`);
-        
-        // Opsional: Reset Form setelah berhasil
-        setCustomerName("");
-        setCustomerPhone("");
-        setCustomServiceName("");
-        setBasePrice("");
-        setOrigin("");
-        setDestination("");
+        // Alihkan (Redirect) ke halaman Riwayat Pesanan jika berhasil!
+        router.push("/admin/orders");
       } else {
         alert(`Gagal membuat pesanan: ${response.error}`);
       }
@@ -394,9 +402,13 @@ export default function NewOrderPage() {
                     onChange={(e) => setDriverCode(e.target.value)}
                     className="flex-1 w-full bg-transparent border-0 outline-none p-0 text-slate-800 text-sm font-bold appearance-none cursor-pointer"
                   >
-                    <option value="">-- Pilih Driver Ready --</option>
-                    <option value="01">Ahmad (01) - Kota</option>
-                    <option value="02">Budi (02) - Kab</option>
+                    <option value="">-- Lempar ke Semua (Tanpa Ditugaskan) --</option>
+                    {/* DAFTAR DRIVER DINAMIS */}
+                    {availableDrivers.map(driver => (
+                      <option key={driver.code} value={driver.code}>
+                        {driver.name} ({driver.code}) - {driver.area}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -476,7 +488,7 @@ export default function NewOrderPage() {
               </div>
 
               {/* ================================================ */}
-              {/* TOMBOL TERBITKAN INVOICE (DENGAN FUNGSI BACKEND) */}
+              {/* TOMBOL TERBITKAN INVOICE */}
               {/* ================================================ */}
               <div className="pt-2">
                 <button 

@@ -6,6 +6,8 @@ import {
   ToggleRight, ToggleLeft, Eye, Receipt, ShoppingBag,
   UserCheck, Phone
 } from "lucide-react";
+import { db } from "@/lib/firebase";
+import { doc, getDoc, setDoc } from "firebase/firestore";
 
 export default function SettingsPage() {
   const [isSaving, setIsSaving] = useState(false);
@@ -34,8 +36,26 @@ export default function SettingsPage() {
     footerNote: "Terima kasih telah mempercayakan layanan Anda kepada MTM App. Harap simpan nota ini sebagai bukti pembayaran yang sah.",
   });
 
+  // FUNGSI TARIK DATA PENGATURAN DARI FIREBASE
+  const fetchSettings = async () => {
+    try {
+      const docRef = doc(db, "settings", "global");
+      const docSnap = await getDoc(docRef);
+      
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.commissionTiers) setCommissionTiers(data.commissionTiers);
+        if (data.paymentInfo) setPaymentInfo(data.paymentInfo);
+        if (data.invoiceConfig) setInvoiceConfig(data.invoiceConfig);
+      }
+    } catch (error) {
+      console.error("Gagal memuat pengaturan:", error);
+    }
+  };
+
   useEffect(() => {
     setIsLoaded(true);
+    fetchSettings(); // Tarik data saat halaman dibuka
   }, []);
 
   const handleUpdateTier = (tier: 'ringan'|'sedang'|'berat', value: string) => {
@@ -51,12 +71,25 @@ export default function SettingsPage() {
     setInvoiceConfig({ ...invoiceConfig, [field]: !invoiceConfig[field] });
   };
 
-  const handleSave = () => {
+  // FUNGSI SIMPAN KE FIREBASE
+  const handleSave = async () => {
     setIsSaving(true);
-    setTimeout(() => {
+    try {
+      const docRef = doc(db, "settings", "global");
+      await setDoc(docRef, {
+        commissionTiers,
+        paymentInfo,
+        invoiceConfig,
+        updatedAt: new Date().toISOString()
+      }, { merge: true }); // Merge true agar tidak menimpa data lain jika ada
+      
+      alert("Pengaturan Sistem berhasil disimpan ke Database!");
+    } catch (error) {
+      console.error("Gagal menyimpan:", error);
+      alert("Gagal menyimpan pengaturan. Periksa koneksi Anda.");
+    } finally {
       setIsSaving(false);
-      alert("Pengaturan Sistem, Pembayaran, dan Nota berhasil disimpan!");
-    }, 1500);
+    }
   };
 
   return (
@@ -241,7 +274,6 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
-                {/* PREVIEW: INFORMASI DRIVER (BARU) */}
                 <div className="bg-slate-50/80 p-3 rounded-xl border border-slate-100 mb-5 space-y-1.5 animate-in fade-in slide-in-from-top-2">
                   <h4 className="text-[9px] font-black text-slate-400 uppercase tracking-[0.15em] mb-1 flex items-center gap-1.5">
                     <UserCheck size={11} className="text-blue-500" /> Informasi Driver
