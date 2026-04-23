@@ -2,8 +2,11 @@
 import { useState, useEffect } from "react";
 import { 
   Search, Plus, MapPin, Phone, Car, ShieldCheck, 
-  MessageCircle, Wallet, CalendarDays, RefreshCw, X, Save
+  MessageCircle, Wallet, CalendarDays, RefreshCw, X, Save,
+  Ban, CheckCircle2, Trash2
 } from "lucide-react";
+import { db } from "@/lib/firebase";
+import { collection, query, where, getDocs, doc, updateDoc, deleteDoc } from "firebase/firestore";
 
 export default function DriverManagementPage() {
   const [isLoaded, setIsLoaded] = useState(false);
@@ -67,6 +70,49 @@ export default function DriverManagementPage() {
       alert("Kesalahan jaringan saat menyimpan data.");
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  // LOGIKA BEKUKAN (SUSPEND) ATAU AKTIFKAN DRIVER
+  const handleToggleSuspend = async (code: string, currentStatus: string) => {
+    const newStatus = currentStatus === 'suspend' ? 'aktif' : 'suspend';
+    const actionName = newStatus === 'suspend' ? 'Membekukan' : 'Mengaktifkan';
+
+    if (confirm(`Apakah Anda yakin ingin ${actionName} akun driver ${code}?`)) {
+      try {
+        const q = query(collection(db, "drivers"), where("code", "==", code));
+        const snap = await getDocs(q);
+        
+        if (!snap.empty) {
+          const docId = snap.docs[0].id;
+          await updateDoc(doc(db, "drivers", docId), { status: newStatus });
+          alert(`Akun driver ${code} berhasil ${newStatus === 'suspend' ? 'dibekukan' : 'diaktifkan kembali'}.`);
+          fetchDrivers();
+        }
+      } catch (error) {
+        alert("Terjadi kesalahan saat mengubah status driver.");
+        console.error(error);
+      }
+    }
+  };
+
+  // LOGIKA HAPUS PERMANEN DRIVER
+  const handleDeleteDriver = async (code: string, name: string) => {
+    if (confirm(`PERINGATAN KERAS!\nApakah Anda yakin ingin menghapus permanen data driver ${name} (${code})? Data tidak dapat dikembalikan!`)) {
+      try {
+        const q = query(collection(db, "drivers"), where("code", "==", code));
+        const snap = await getDocs(q);
+        
+        if (!snap.empty) {
+          const docId = snap.docs[0].id;
+          await deleteDoc(doc(db, "drivers", docId));
+          alert(`Akun driver ${name} telah berhasil dihapus dari sistem.`);
+          fetchDrivers();
+        }
+      } catch (error) {
+        alert("Terjadi kesalahan saat menghapus driver.");
+        console.error(error);
+      }
     }
   };
 
@@ -145,30 +191,52 @@ export default function DriverManagementPage() {
           {filteredDrivers.map((driver) => {
             const dStatus = driver.status || 'aktif';
             return (
-              <div key={driver.code} className="bg-white rounded-[1.5rem] p-5 shadow-sm border border-slate-200 hover:shadow-md transition-all duration-300 group relative overflow-hidden flex flex-col">
-                <div className={`absolute top-0 right-0 w-24 h-24 rounded-bl-full -z-10 opacity-20 transition-colors ${dStatus === 'aktif' ? 'bg-emerald-500' : 'bg-slate-400'}`}></div>
+              <div key={driver.code} className={`bg-white rounded-[1.5rem] p-5 shadow-sm border ${dStatus === 'suspend' ? 'border-rose-200' : 'border-slate-200'} hover:shadow-md transition-all duration-300 group relative overflow-hidden flex flex-col`}>
+                <div className={`absolute top-0 right-0 w-24 h-24 rounded-bl-full -z-10 opacity-20 transition-colors ${dStatus === 'aktif' ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
 
                 <div className="flex justify-between items-start mb-5">
                   <div className="flex gap-3 items-center">
                     <div className="relative">
-                      <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center text-slate-700 font-black text-lg border border-slate-300 shadow-inner uppercase">
+                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-black text-lg border shadow-inner uppercase ${dStatus === 'suspend' ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-gradient-to-br from-slate-100 to-slate-200 text-slate-700 border-slate-300'}`}>
                         {driver.name ? driver.name.substring(0,2) : "DR"}
                       </div>
-                      <div className={`absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full border-2 border-white ${dStatus === 'aktif' ? 'bg-emerald-500' : 'bg-slate-400'}`}></div>
+                      <div className={`absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full border-2 border-white ${dStatus === 'aktif' ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                        <h3 className="font-bold text-slate-800 text-[15px] tracking-tight group-hover:text-blue-600 transition-colors line-clamp-1">{driver.name}</h3>
-                        <span className="text-[10px] font-black text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 uppercase">{driver.code}</span>
+                        <h3 className="font-bold text-slate-800 text-[15px] tracking-tight group-hover:text-blue-600 transition-colors line-clamp-1">
+                          {driver.name}
+                        </h3>
+                        <span className={`text-[10px] font-black px-1.5 py-0.5 rounded border uppercase ${dStatus === 'suspend' ? 'bg-rose-50 text-rose-600 border-rose-200' : 'bg-slate-100 text-slate-400 border-slate-200'}`}>
+                          {driver.code}
+                        </span>
                       </div>
                       <p className="text-[11px] font-semibold text-slate-500 flex items-center gap-1 mt-0.5">
-                        <MapPin size={10} className="text-blue-500" /> {driver.area || "Area belum ditentukan"}
+                        <MapPin size={10} className={dStatus === 'suspend' ? 'text-rose-500' : 'text-blue-500'} /> {driver.area || "Area belum ditentukan"}
                       </p>
                     </div>
                   </div>
+
+                  {/* KOTAK AKSI (SUSPEND / HAPUS) */}
+                  <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-lg border border-slate-100">
+                    <button 
+                      onClick={() => handleToggleSuspend(driver.code, dStatus)}
+                      className={`p-1.5 rounded-md transition-colors active:scale-95 ${dStatus === 'suspend' ? 'bg-emerald-100 text-emerald-600 hover:bg-emerald-200' : 'bg-amber-100 text-amber-600 hover:bg-amber-200'}`}
+                      title={dStatus === 'suspend' ? 'Aktifkan Kembali' : 'Bekukan Akun'}
+                    >
+                      {dStatus === 'suspend' ? <CheckCircle2 size={14} /> : <Ban size={14} />}
+                    </button>
+                    <button 
+                      onClick={() => handleDeleteDriver(driver.code, driver.name)}
+                      className="p-1.5 rounded-md bg-rose-100 text-rose-600 hover:bg-rose-200 transition-colors active:scale-95"
+                      title="Hapus Permanen"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 </div>
 
-                <div className="bg-slate-50 rounded-xl p-3 border border-slate-100 space-y-2 mb-5">
+                <div className={`rounded-xl p-3 border space-y-2 mb-5 ${dStatus === 'suspend' ? 'bg-rose-50/50 border-rose-100' : 'bg-slate-50 border-slate-100'}`}>
                   <div className="flex items-center justify-between">
                     <span className="flex items-center gap-2 text-[12px] font-medium text-slate-600">
                       <Car size={14} className="text-slate-400" /> {driver.vehicle || "Kendaraan belum ditentukan"}

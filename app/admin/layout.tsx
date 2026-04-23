@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { 
   LayoutDashboard, PlusCircle, ClipboardList, 
-  Car, Settings, Search, Bell, LogOut
+  Car, Settings, Bell, LogOut, Clock
 } from "lucide-react";
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -12,13 +12,43 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const pathname = usePathname();
   const router = useRouter();
 
+  // STATE UNTUK JAM REAL-TIME & NOTIFIKASI
+  const [currentTime, setCurrentTime] = useState<Date | null>(null);
+  const [pendingOrdersCount, setPendingOrdersCount] = useState(0);
+
   useEffect(() => {
-    const handleResize = () => {
-      setIsDesktop(window.innerWidth >= 768);
-    };
+    // 1. Logika Responsive Layar
+    const handleResize = () => setIsDesktop(window.innerWidth >= 768);
     handleResize();
     window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+
+    // 2. Logika Jam Real-Time Berdetak
+    setCurrentTime(new Date());
+    const timeInterval = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+
+    // 3. Logika Tarik Data Notifikasi Pesanan Baru (Tiap 10 Detik)
+    const fetchPendingCount = async () => {
+      try {
+        const res = await fetch("/api/orders");
+        const result = await res.json();
+        if (result.success) {
+          const pending = result.data.filter((o: any) => o.status === 'pending');
+          setPendingOrdersCount(pending.length);
+        }
+      } catch (error) {
+        console.error("Gagal menarik notifikasi", error);
+      }
+    };
+    fetchPendingCount();
+    const notifInterval = setInterval(fetchPendingCount, 10000);
+
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      clearInterval(timeInterval);
+      clearInterval(notifInterval);
+    };
   }, []);
 
   // FUNGSI LOGOUT (Menghapus Sesi & Kembali ke Login)
@@ -45,6 +75,15 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     } else {
       return pathname.startsWith(itemPath);
     }
+  };
+
+  // HELPER FORMAT WAKTU & TANGGAL
+  const formatTime = (date: Date) => {
+    // Memaksa format jam pakai titik dua (:) bukan titik (.)
+    return new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(date).replace(/\./g, ':');
+  };
+  const formatDate = (date: Date) => {
+    return new Intl.DateTimeFormat('id-ID', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }).format(date);
   };
 
   return (
@@ -105,36 +144,55 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         )}
 
         {/* HEADER ATAS */}
-        <header className="h-20 md:h-24 flex items-center justify-between px-5 md:px-8 z-10 bg-white/80 md:bg-transparent backdrop-blur-md md:backdrop-blur-none border-b border-slate-200 md:border-none shrink-0 w-full">
+        <header className="h-20 md:h-24 flex items-center justify-between px-4 md:px-8 z-10 bg-white/80 md:bg-transparent backdrop-blur-md md:backdrop-blur-none border-b border-slate-200 md:border-none shrink-0 w-full">
           
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 md:gap-3">
             {!isDesktop && (
               <div className="bg-gradient-to-br from-blue-600 to-indigo-600 p-2 rounded-lg shadow-sm shrink-0">
-                <Car size={18} className="text-white" strokeWidth={2.5} />
+                <Car size={16} className="text-white" strokeWidth={2.5} />
               </div>
             )}
-            <h2 className="text-lg md:text-xl font-bold text-slate-800 tracking-tight">
+            <h2 className="text-base md:text-xl font-bold text-slate-800 tracking-tight whitespace-nowrap">
               Portal Owner
             </h2>
           </div>
           
-          <div className="flex items-center gap-3 md:gap-5">
-            {isDesktop && (
-              <div className="flex items-center bg-white/80 backdrop-blur-md px-4 py-2.5 rounded-xl border border-slate-200 focus-within:ring-2 focus-within:ring-blue-100 transition-all shadow-sm">
-                <Search size={16} className="text-slate-400" />
-                <input type="text" placeholder="Cari invoice..." className="bg-transparent border-none outline-none ml-2 text-sm w-40 text-slate-700 placeholder-slate-400 font-medium" />
+          <div className="flex items-center gap-2 md:gap-5">
+            
+            {/* JAM REAL-TIME UNTUK SEMUA LAYAR */}
+            {currentTime && (
+              <div className="flex items-center gap-1.5 md:gap-3 bg-slate-100/80 backdrop-blur-md px-2.5 py-1.5 md:px-4 md:py-2 rounded-lg md:rounded-xl border border-slate-200 shadow-inner md:mr-2">
+                <Clock size={14} className="text-blue-600 hidden sm:block md:w-4 md:h-4" />
+                <div className="flex flex-col text-center sm:text-left">
+                  <span className="text-[10px] md:text-xs font-black text-slate-800 tracking-widest tabular-nums leading-none md:mb-1">
+                    {formatTime(currentTime)} <span className="hidden sm:inline">WIB</span>
+                  </span>
+                  <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest leading-none hidden md:block">
+                    {formatDate(currentTime)}
+                  </span>
+                </div>
               </div>
             )}
 
-            <button className="p-2.5 md:p-3 rounded-xl md:rounded-2xl bg-white shadow-sm hover:shadow-md border border-slate-200 text-slate-600 relative transition-all active:scale-95">
-              <Bell size={18} className="md:w-5 md:h-5" />
-              <span className="absolute top-2 right-2 md:top-2.5 md:right-2.5 h-2 w-2 md:h-2.5 md:w-2.5 bg-rose-500 rounded-full border-2 border-white animate-pulse"></span>
+            {/* TOMBOL LONCENG AKTIF */}
+            <button 
+              onClick={() => router.push('/admin/orders')}
+              className="p-2 md:p-3 rounded-lg md:rounded-2xl bg-white shadow-sm hover:shadow-md border border-slate-200 text-slate-600 relative transition-all active:scale-95 shrink-0"
+              title="Lihat Notifikasi Pesanan"
+            >
+              <Bell size={16} className="md:w-5 md:h-5" />
+              {pendingOrdersCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 h-4 w-4 md:h-5 md:w-5 bg-rose-500 rounded-full border-2 border-white flex items-center justify-center text-[8px] md:text-[9px] font-black text-white shadow-sm animate-bounce">
+                  {pendingOrdersCount}
+                </span>
+              )}
             </button>
             
+            {/* AVATAR OWNER */}
             <div 
-              onClick={!isDesktop ? handleLogout : undefined} // HP bisa tekan profil untuk keluar
-              className="h-10 w-10 md:h-12 md:w-12 rounded-xl md:rounded-2xl bg-gradient-to-tr from-slate-800 to-slate-900 flex items-center justify-center text-white font-black text-xs md:text-sm shadow-md cursor-pointer border-2 border-white"
-              title={!isDesktop ? "Ketuk untuk Keluar" : "Profil"}
+              onClick={!isDesktop ? handleLogout : undefined} 
+              className="h-8 w-8 md:h-12 md:w-12 rounded-lg md:rounded-2xl bg-gradient-to-tr from-slate-800 to-slate-900 flex items-center justify-center text-white font-black text-[10px] md:text-sm shadow-md cursor-pointer border-2 border-white hover:ring-2 ring-slate-300 transition-all shrink-0"
+              title={!isDesktop ? "Ketuk untuk Keluar" : "Akun Owner Utama"}
             >
               OW
             </div>

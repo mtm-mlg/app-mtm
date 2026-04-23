@@ -2,10 +2,10 @@
 import { useState, useEffect } from "react";
 import { 
   Search, FileDown, Filter, ChevronLeft, ChevronRight, 
-  Info, Clock, Camera, X, Trash2
+  Info, Clock, Camera, X, Trash2, XCircle
 } from "lucide-react";
 import { db } from "@/lib/firebase";
-import { doc, deleteDoc } from "firebase/firestore";
+import { doc, deleteDoc, updateDoc } from "firebase/firestore";
 
 export default function OrderHistoryPage() {
   const [isLoaded, setIsLoaded] = useState(false);
@@ -46,6 +46,7 @@ export default function OrderHistoryPage() {
   const formatDate = (dateString: string) => {
     if (!dateString) return "-";
     const date = new Date(dateString);
+    if (isNaN(date.getTime())) return "-";
     return new Intl.DateTimeFormat('id-ID', {
       day: '2-digit', month: 'short', year: 'numeric',
       hour: '2-digit', minute: '2-digit'
@@ -69,13 +70,27 @@ export default function OrderHistoryPage() {
     }
   };
 
-  // LOGIKA MENGHAPUS PESANAN (HANYA UNTUK STATUS CANCELLED)
+  // LOGIKA MEMBATALKAN PESANAN (UBAH STATUS JADI CANCELLED)
+  const handleCancelOrder = async (orderId: string, invoiceId: string) => {
+    if (confirm(`Batalkan pesanan ${invoiceId}? Driver yang ditugaskan akan kehilangan orderan ini.`)) {
+      try {
+        await updateDoc(doc(db, "orders", orderId), { status: "cancelled" });
+        alert(`Pesanan ${invoiceId} berhasil dibatalkan.`);
+        fetchOrders();
+      } catch (error) {
+        alert("Terjadi kesalahan saat membatalkan pesanan.");
+        console.error(error);
+      }
+    }
+  };
+
+  // LOGIKA MENGHAPUS PESANAN PERMANEN
   const handleDeleteOrder = async (orderId: string, invoiceId: string) => {
-    if (confirm(`Apakah Anda yakin ingin menghapus pesanan ${invoiceId} secara permanen? Data yang dihapus tidak dapat dikembalikan.`)) {
+    if (confirm(`Hapus permanen pesanan ${invoiceId} dari database? Data yang dihapus tidak dapat dikembalikan.`)) {
       try {
         await deleteDoc(doc(db, "orders", orderId));
-        alert(`Pesanan ${invoiceId} berhasil dihapus.`);
-        fetchOrders(); // Refresh tabel setelah dihapus
+        alert(`Pesanan ${invoiceId} berhasil dihapus permanen.`);
+        fetchOrders(); 
       } catch (error) {
         alert("Terjadi kesalahan saat menghapus data.");
         console.error(error);
@@ -87,7 +102,6 @@ export default function OrderHistoryPage() {
   const filteredOrders = orders.filter(order => {
     const matchSearch = order.invoice?.toLowerCase().includes(searchTerm.toLowerCase()) || order.customerName?.toLowerCase().includes(searchTerm.toLowerCase());
     
-    // Konversi status filter (karena di DB pakai lowercase bahasa Inggris)
     let targetStatus = "semua";
     if (statusFilter === "Selesai") targetStatus = "completed";
     if (statusFilter === "Proses") targetStatus = "active";
@@ -95,7 +109,6 @@ export default function OrderHistoryPage() {
     if (statusFilter === "Batal") targetStatus = "cancelled";
 
     const matchStatus = statusFilter === "Semua" || order.status === targetStatus;
-    
     return matchSearch && matchStatus;
   });
 
@@ -103,7 +116,6 @@ export default function OrderHistoryPage() {
   const totalPages = Math.ceil(filteredOrders.length / itemsPerPage);
   const paginatedOrders = filteredOrders.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
-  // Jika sedang mencari/filter, kembalikan ke halaman 1
   useEffect(() => {
     setCurrentPage(1);
   }, [searchTerm, statusFilter]);
@@ -162,7 +174,6 @@ export default function OrderHistoryPage() {
         </div>
         <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto no-scrollbar">
           
-          {/* FILTER STATUS AKTIF */}
           <select 
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
@@ -264,18 +275,31 @@ export default function OrderHistoryPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-center">
-                      {/* TOMBOL HAPUS (HANYA MUNCUL JIKA STATUS BATAL) */}
-                      {order.status === 'cancelled' ? (
-                        <button 
-                          onClick={() => handleDeleteOrder(order.id, order.invoice)}
-                          className="p-1.5 text-rose-600 bg-rose-50 border border-rose-100 hover:bg-rose-100 hover:text-rose-700 rounded-lg transition-all shadow-sm mx-auto flex active:scale-95"
-                          title="Hapus Pesanan"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      ) : (
-                        <span className="text-[10px] font-medium text-slate-400">-</span>
-                      )}
+                      <div className="flex items-center justify-center gap-2">
+                        
+                        {/* TOMBOL BATALKAN (Muncul jika Pending atau Active) */}
+                        {(order.status === 'pending' || order.status === 'active') && (
+                          <button 
+                            onClick={() => handleCancelOrder(order.id, order.invoice)}
+                            className="p-1.5 text-amber-600 bg-amber-50 border border-amber-100 hover:bg-amber-100 hover:text-amber-700 rounded-lg transition-all shadow-sm flex active:scale-95"
+                            title="Batalkan Pesanan"
+                          >
+                            <XCircle size={16} />
+                          </button>
+                        )}
+
+                        {/* TOMBOL HAPUS PERMANEN (Muncul jika Selesai atau Batal) */}
+                        {(order.status === 'completed' || order.status === 'cancelled') && (
+                          <button 
+                            onClick={() => handleDeleteOrder(order.id, order.invoice)}
+                            className="p-1.5 text-rose-600 bg-rose-50 border border-rose-100 hover:bg-rose-100 hover:text-rose-700 rounded-lg transition-all shadow-sm flex active:scale-95"
+                            title="Hapus Permanen"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
+
+                      </div>
                     </td>
                   </tr>
                 ))
