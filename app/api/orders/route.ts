@@ -18,14 +18,15 @@ export async function POST(request: Request) {
       );
     }
 
-    // 2. Generate Nomor Invoice (Contoh: INV-MTM-1713800000)
-    const invoiceNumber = `INV-MTM-${Date.now()}`;
+    // 2. TANGKAP INVOICE DARI FRONTEND
+    const invoiceNumber = body.invoice || `INV-CADANGAN-${Date.now()}`;
 
     // 3. Simpan ke Koleksi 'orders' di Firestore
     const docRef = await addDoc(collection(db, "orders"), {
       invoice: invoiceNumber,
       customerName: body.customerName,
       customerPhone: body.customerPhone,
+      customerAddress: body.customerAddress || "-", // <-- ALAMAT DISIMPAN KE DATABASE!
       category: body.category,
       serviceName: body.serviceName,
       unit: body.unit,

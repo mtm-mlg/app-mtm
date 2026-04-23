@@ -34,6 +34,7 @@ export default function NewOrderPage() {
   // STATE INFO PELANGGAN
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
+  const [customerAddress, setCustomerAddress] = useState(""); // <-- STATE BARU UNTUK ALAMAT
 
   // STATE KATEGORI
   const [selectedCategory, setSelectedCategory] = useState("Jarak");
@@ -113,17 +114,43 @@ export default function NewOrderPage() {
   // FUNGSI SUBMIT KE FIREBASE BACKEND
   // ========================================================
   const submitOrder = async () => {
-    if (!customerName || !customerPhone || !customServiceName || !basePrice) {
-      alert("Peringatan: Nama Pelanggan, Nomor WA, Nama Jasa, dan Tarif Dasar wajib diisi!");
+    // VALIDASI DIPERBARUI: Wajib isi alamat
+    if (!customerName || !customerPhone || !customerAddress || !customServiceName || !basePrice) {
+      alert("Peringatan: Nama Pelanggan, No WA, Alamat, Nama Jasa, dan Tarif Dasar wajib diisi!");
       return;
     }
 
     setIsSubmitting(true);
 
     try {
+      // 1. Ambil data pesanan sebelumnya untuk menghitung nomor urut (Sequence)
+      const ordersRes = await fetch("/api/orders");
+      const ordersData = await ordersRes.json();
+      
+      let countThisMonth = 0;
+      const now = new Date();
+      const currentYear = now.getFullYear(); 
+      const currentMonth = String(now.getMonth() + 1).padStart(2, '0');
+
+      if (ordersData.success) {
+        const thisMonthOrders = ordersData.data.filter((o: any) => {
+          if (!o.createdAt) return false;
+          const d = new Date(o.createdAt);
+          return d.getFullYear() === currentYear && String(d.getMonth() + 1).padStart(2, '0') === currentMonth;
+        });
+        countThisMonth = thisMonthOrders.length;
+      }
+
+      // 2. Buat Nomor Invoice dengan format: INV-YYYYMMOOO (Contoh: INV-202604001)
+      const sequenceNumber = String(countThisMonth + 1).padStart(3, '0'); 
+      const generatedInvoice = `INV-${currentYear}${currentMonth}${sequenceNumber}`;
+
+      // 3. Susun data final yang akan dikirim ke database
       const orderData = {
+        invoice: generatedInvoice, 
         customerName,
         customerPhone,
+        customerAddress, // <-- DATA ALAMAT DIKIRIM KE BACKEND
         category: selectedCategory,
         serviceName: customServiceName,
         basePrice: numBasePrice,
@@ -139,6 +166,7 @@ export default function NewOrderPage() {
         totalPrice: totalHarga,
       };
 
+      // 4. Tembakkan ke Backend!
       const res = await fetch("/api/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -148,7 +176,7 @@ export default function NewOrderPage() {
       const response = await res.json();
 
       if (response.success) {
-        // Alihkan (Redirect) ke halaman Riwayat Pesanan jika berhasil!
+        alert(`Pesanan Berhasil Dibuat!\nNomor Invoice: ${generatedInvoice}`);
         router.push("/admin/orders");
       } else {
         alert(`Gagal membuat pesanan: ${response.error}`);
@@ -194,7 +222,7 @@ export default function NewOrderPage() {
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 ml-1">Nama Lengkap</label>
+                <label className="text-xs font-bold text-slate-700 ml-1">Nama Lengkap <span className="text-rose-500">*</span></label>
                 <div className="flex items-center w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-100 transition-all overflow-hidden">
                   <User size={16} className="text-slate-400 mr-2 shrink-0" />
                   <input 
@@ -207,7 +235,7 @@ export default function NewOrderPage() {
                 </div>
               </div>
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 ml-1">Nomor WhatsApp</label>
+                <label className="text-xs font-bold text-slate-700 ml-1">Nomor WhatsApp <span className="text-rose-500">*</span></label>
                 <div className="flex items-center w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-100 transition-all overflow-hidden">
                   <Phone size={16} className="text-slate-400 mr-2 shrink-0" />
                   <input 
@@ -219,6 +247,22 @@ export default function NewOrderPage() {
                   />
                 </div>
               </div>
+
+              {/* KOLOM ALAMAT/LINK LOKASI */}
+              <div className="space-y-1.5 md:col-span-2">
+                <label className="text-xs font-bold text-slate-700 ml-1">Alamat Lengkap / Link Maps Pelanggan <span className="text-rose-500">*</span></label>
+                <div className="flex items-center w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-100 transition-all overflow-hidden">
+                  <MapPin size={16} className="text-slate-400 mr-2 shrink-0" />
+                  <input 
+                    type="text" 
+                    value={customerAddress}
+                    onChange={(e) => setCustomerAddress(e.target.value)}
+                    placeholder="Contoh: Perum. Indah Blok A1 atau Paste Link Gmaps..." 
+                    className="flex-1 w-full bg-transparent border-0 outline-none focus:ring-0 p-0 text-slate-800 text-sm font-medium" 
+                  />
+                </div>
+              </div>
+
             </div>
           </div>
 
@@ -286,7 +330,7 @@ export default function NewOrderPage() {
 
             <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-5">
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 ml-1">Nama Jasa / Pekerjaan</label>
+                <label className="text-xs font-bold text-slate-700 ml-1">Nama Jasa / Pekerjaan <span className="text-rose-500">*</span></label>
                 <input 
                   type="text" 
                   value={customServiceName}
@@ -298,7 +342,7 @@ export default function NewOrderPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 ml-1">Tarif Dasar</label>
+                  <label className="text-xs font-bold text-slate-700 ml-1">Tarif Dasar <span className="text-rose-500">*</span></label>
                   <div className="flex items-center w-full px-4 py-3 bg-white border border-slate-300 rounded-xl focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-100 transition-all overflow-hidden">
                     <span className="text-slate-400 font-bold mr-2 text-xs border-r border-slate-200 pr-2">Rp</span>
                     <input 
