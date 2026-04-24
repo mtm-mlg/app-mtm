@@ -15,7 +15,7 @@ export default function OrderHistoryPage() {
   const [orders, setOrders] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [drivers, setDrivers] = useState<any[]>([]);
-  const [settings, setSettings] = useState<any>(null); // State Settings Ditambahkan
+  const [settings, setSettings] = useState<any>(null);
   
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("Semua");
@@ -52,35 +52,72 @@ export default function OrderHistoryPage() {
     fetchAllData(); 
   }, []);
 
-  const formatDate = (dateString: string) => {
-    if (!dateString) return "-";
+  // FORMAT TANGGAL YANG LEBIH AMAN (ANTI TANGGAL KOSONG)
+  const formatDateSafe = (dateString: any) => {
+    const fallbackDate = new Intl.DateTimeFormat('id-ID', {
+      day: '2-digit', month: 'short', year: 'numeric',
+      hour: '2-digit', minute: '2-digit'
+    }).format(new Date());
+
+    if (!dateString) return fallbackDate;
+    
     const date = new Date(dateString);
-    if (isNaN(date.getTime())) return "-";
+    if (isNaN(date.getTime())) return fallbackDate; 
+    
     return new Intl.DateTimeFormat('id-ID', {
       day: '2-digit', month: 'short', year: 'numeric',
       hour: '2-digit', minute: '2-digit'
     }).format(date);
   };
 
-  const getOwnerCommission = (tier: string, total: number) => {
-    if (tier === 'ringan') return total * 0.30; 
-    if (tier === 'sedang') return total * 0.20; 
-    if (tier === 'berat') return total * 0.10;  
+  // KALKULASI KOMISI OWNER SECARA AKURAT
+  const getOwnerComm = (order: any) => {
+    if (order.exactOwnerCommission !== undefined) return order.exactOwnerCommission;
+    const base = Number(order.basePrice) || Number(order.totalPrice) || 0;
+    const tier = order.commissionTier || 'sedang';
+    if (tier === 'ringan') return base * 0.30;
+    if (tier === 'sedang') return base * 0.20;
+    if (tier === 'berat') return base * 0.10;
     return 0;
+  };
+
+  // KALKULASI PENDAPATAN BERSIH DRIVER
+  const getDriverNet = (order: any) => {
+    const ownerComm = getOwnerComm(order);
+    const base = Number(order.basePrice) || Number(order.totalPrice) || 0;
+    const urgent = Number(order.urgentFee) || 0;
+    return (base - ownerComm) + urgent;
   };
 
   const getStatusBadge = (status: string) => {
     switch(status) {
-      case 'pending': return <span className="px-2 py-1 rounded-md text-[10px] font-bold uppercase border inline-block bg-amber-50 text-amber-600 border-amber-100">Menunggu</span>;
-      case 'active': return <span className="px-2 py-1 rounded-md text-[10px] font-bold uppercase border inline-block bg-blue-50 text-blue-600 border-blue-100">Proses</span>;
-      case 'completed': return <span className="px-2 py-1 rounded-md text-[10px] font-bold uppercase border inline-block bg-emerald-50 text-emerald-600 border-emerald-100">Selesai</span>;
-      case 'cancelled': return <span className="px-2 py-1 rounded-md text-[10px] font-bold uppercase border inline-block bg-rose-50 text-rose-600 border-rose-100">Batal</span>;
-      default: return <span className="px-2 py-1 bg-slate-100 text-slate-500 border border-slate-200 rounded-md text-[10px] uppercase">{status}</span>;
+      case 'pending': return <span className="px-2 py-1 rounded text-[10px] font-medium uppercase border inline-block bg-amber-50 text-amber-600 border-amber-100">Menunggu</span>;
+      case 'active': return <span className="px-2 py-1 rounded text-[10px] font-medium uppercase border inline-block bg-blue-50 text-blue-600 border-blue-100">Proses</span>;
+      case 'completed': return <span className="px-2 py-1 rounded text-[10px] font-medium uppercase border inline-block bg-emerald-50 text-emerald-600 border-emerald-100">Selesai</span>;
+      case 'cancelled': return <span className="px-2 py-1 rounded text-[10px] font-medium uppercase border inline-block bg-rose-50 text-rose-600 border-rose-100">Batal</span>;
+      default: return <span className="px-2 py-1 bg-slate-100 text-slate-500 border border-slate-200 rounded text-[10px] uppercase">{status}</span>;
+    }
+  };
+
+  // FUNGSI TUGASKAN DRIVER LANGSUNG DARI TABEL
+  const handleAssignDriver = async (orderId: string, driverCode: string) => {
+    if (!driverCode) return;
+    if (confirm(`Tugaskan pesanan ini kepada Driver ${driverCode}?`)) {
+      try {
+        await updateDoc(doc(db, "orders", orderId), { 
+          driverCode: driverCode,
+          status: "active" 
+        });
+        alert(`Driver ${driverCode} berhasil ditugaskan!`);
+        fetchAllData();
+      } catch (error) {
+        alert("Gagal menugaskan driver.");
+      }
     }
   };
 
   const handleCancelOrder = async (orderId: string, invoiceId: string) => {
-    if (confirm(`Batalkan pesanan ${invoiceId}? Driver yang ditugaskan akan kehilangan orderan ini.`)) {
+    if (confirm(`Batalkan pesanan ${invoiceId}?`)) {
       try {
         await updateDoc(doc(db, "orders", orderId), { status: "cancelled" });
         alert(`Pesanan ${invoiceId} berhasil dibatalkan.`);
@@ -92,7 +129,7 @@ export default function OrderHistoryPage() {
   };
 
   const handleDeleteOrder = async (orderId: string, invoiceId: string) => {
-    if (confirm(`Hapus permanen pesanan ${invoiceId} dari database? Data yang dihapus tidak dapat dikembalikan.`)) {
+    if (confirm(`Hapus permanen pesanan ${invoiceId} dari database?`)) {
       try {
         await deleteDoc(doc(db, "orders", orderId));
         alert(`Pesanan ${invoiceId} berhasil dihapus permanen.`);
@@ -104,7 +141,7 @@ export default function OrderHistoryPage() {
   };
 
   // ==========================================================
-  // LOGIKA CETAK PDF MENGGUNAKAN ARIAL & BARCODE QRIS
+  // LOGIKA CETAK PDF & KIRIM WA (DISINKRONKAN DENGAN DRIVER)
   // ==========================================================
   const handleGenerateInvoice = async (order: any) => {
     if (!settings) {
@@ -121,6 +158,13 @@ export default function OrderHistoryPage() {
 
       const config = settings.invoiceConfig || {};
       const payInfo = settings.paymentInfo || {};
+      
+      const baseJasa = Number(order.basePrice) || Number(order.totalPrice) || 0;
+      const shoppingCost = Number(order.shoppingCost) || 0;
+      const urgentFee = Number(order.urgentFee) || 0;
+      
+      // Total tagihan pelanggan (Jasa + Talangan + Urgent)
+      const currentTotal = baseJasa + shoppingCost + urgentFee;
 
       const invoiceElement = document.createElement("div");
       invoiceElement.style.position = "absolute";
@@ -129,7 +173,7 @@ export default function OrderHistoryPage() {
       invoiceElement.style.width = "800px"; 
       invoiceElement.style.backgroundColor = "white";
       invoiceElement.style.color = "#1e293b";
-      invoiceElement.style.fontFamily = "Arial, sans-serif"; // <-- MENGGUNAKAN FONT ARIAL
+      invoiceElement.style.fontFamily = "Arial, sans-serif";
       invoiceElement.style.padding = "40px";
       
       invoiceElement.innerHTML = `
@@ -151,12 +195,12 @@ export default function OrderHistoryPage() {
           <div style="text-align: right;">
             <p style="font-size: 14px; color: #64748b; margin: 0 0 5px 0;">Nomor Invoice:</p>
             <h2 style="font-size: 20px; font-weight: bold; color: #2563eb; margin: 0;">${order.invoice}</h2>
-            <p style="font-size: 14px; margin: 5px 0 0 0;">Tanggal: ${formatDate(order.createdAt)}</p>
+            <p style="font-size: 14px; margin: 5px 0 0 0;">Tanggal: ${formatDateSafe(order.createdAt)}</p>
           </div>
         </div>
 
         <div style="background-color: #f8fafc; padding: 20px; border-radius: 8px; border: 1px solid #e2e8f0; margin-bottom: 30px; font-family: Arial, sans-serif;">
-          <h3 style="font-size: 16px; margin: 0 0 10px 0; border-bottom: 1px solid #cbd5e1; padding-bottom: 5px;">INFO DRIVER / ARMADA</h3>
+          <h3 style="font-size: 16px; margin: 0 0 10px 0; border-bottom: 1px solid #cbd5e1; padding-bottom: 5px;">INFO DRIVER / ARMADA PENGANTAR</h3>
           <div style="display: flex; justify-content: space-between; font-size: 14px;">
             <div><span style="color: #64748b;">Nama:</span> <strong>${driverName}</strong></div>
             <div><span style="color: #64748b;">Kontak:</span> <strong>${driverPhone}</strong></div>
@@ -176,18 +220,28 @@ export default function OrderHistoryPage() {
           <tbody>
             <tr style="border-bottom: 1px solid #e2e8f0;">
               <td style="padding: 15px 10px; font-size: 15px; font-weight: bold;">
-                ${order.serviceName} <div style="font-size: 12px; font-weight: normal; color: #64748b;">Kategori: ${order.category}</div>
+                ${order.serviceName} <div style="font-size: 12px; font-weight: normal; color: #64748b;">Ongkos Kirim / Tarif Jasa</div>
               </td>
-              <td style="padding: 15px 10px; text-align: right;">${order.quantity} ${order.unit}</td>
-              <td style="padding: 15px 10px; text-align: right;">Rp ${(order.basePrice || 0).toLocaleString('id-ID')}</td>
-              <td style="padding: 15px 10px; text-align: right; font-weight: bold;">Rp ${((order.basePrice || 0) * (order.quantity || 1)).toLocaleString('id-ID')}</td>
+              <td style="padding: 15px 10px; text-align: right;">${order.quantity || 1} ${order.unit || 'Pcs'}</td>
+              <td style="padding: 15px 10px; text-align: right;">Rp ${(baseJasa).toLocaleString('id-ID')}</td>
+              <td style="padding: 15px 10px; text-align: right; font-weight: bold;">Rp ${(baseJasa).toLocaleString('id-ID')}</td>
             </tr>
-            ${order.isUrgent ? `
+            ${shoppingCost > 0 ? `
             <tr style="border-bottom: 1px solid #e2e8f0;">
-              <td style="padding: 15px 10px; font-weight: bold; color: #e11d48;">Biaya Urgent</td>
+              <td style="padding: 15px 10px; font-size: 15px; font-weight: bold; color: #e11d48;">
+                Harga Barang Belanjaan (Talangan)
+              </td>
               <td style="padding: 15px 10px; text-align: right;">1 Lumpsum</td>
-              <td style="padding: 15px 10px; text-align: right;">Rp ${(order.urgentFee || 0).toLocaleString('id-ID')}</td>
-              <td style="padding: 15px 10px; text-align: right; font-weight: bold; color: #e11d48;">Rp ${(order.urgentFee || 0).toLocaleString('id-ID')}</td>
+              <td style="padding: 15px 10px; text-align: right;">Rp ${shoppingCost.toLocaleString('id-ID')}</td>
+              <td style="padding: 15px 10px; text-align: right; font-weight: bold; color: #e11d48;">Rp ${shoppingCost.toLocaleString('id-ID')}</td>
+            </tr>
+            ` : ''}
+            ${urgentFee > 0 ? `
+            <tr style="border-bottom: 1px solid #e2e8f0;">
+              <td style="padding: 15px 10px; font-weight: bold; color: #d97706;">Biaya Urgent / Prioritas</td>
+              <td style="padding: 15px 10px; text-align: right;">1 Lumpsum</td>
+              <td style="padding: 15px 10px; text-align: right;">Rp ${urgentFee.toLocaleString('id-ID')}</td>
+              <td style="padding: 15px 10px; text-align: right; font-weight: bold; color: #d97706;">Rp ${urgentFee.toLocaleString('id-ID')}</td>
             </tr>
             ` : ''}
           </tbody>
@@ -197,7 +251,7 @@ export default function OrderHistoryPage() {
           <div style="background-color: #f8fafc; padding: 15px 30px; border-radius: 8px; border: 1px solid #cbd5e1; min-width: 300px;">
             <div style="display: flex; justify-content: space-between; font-size: 16px; align-items: center;">
               <span>Total Tagihan</span>
-              <strong style="font-size: 24px;">Rp ${order.totalPrice.toLocaleString('id-ID')}</strong>
+              <strong style="font-size: 24px;">Rp ${currentTotal.toLocaleString('id-ID')}</strong>
             </div>
           </div>
         </div>
@@ -221,8 +275,8 @@ export default function OrderHistoryPage() {
           </div>
           <div style="width: 200px; text-align: center; padding-top: 10px;">
             <p style="font-size: 14px; margin: 0 0 50px 0;">Salam Hormat,</p>
-            <p style="font-size: 16px; font-weight: bold; border-bottom: 1px solid #0f172a; display: inline-block; padding-bottom: 2px; margin: 0;">Direktur Utama</p>
-            <p style="font-size: 12px; color: #64748b; margin-top: 5px;">Manajemen MTM</p>
+            <p style="font-size: 16px; font-weight: bold; border-bottom: 1px solid #0f172a; display: inline-block; padding-bottom: 2px; margin: 0;">Manajemen MTM</p>
+            <p style="font-size: 12px; color: #64748b; margin-top: 5px;">Penyedia Layanan</p>
           </div>
         </div>
 
@@ -243,16 +297,22 @@ export default function OrderHistoryPage() {
 
       document.body.removeChild(invoiceElement);
 
-      const pdfFileName = `${order.invoice}.pdf`;
+      const pdfFileName = `Invoice_${order.invoice}.pdf`;
       pdf.save(pdfFileName);
 
+      // (OPSIONAL) Anda bisa mengaktifkan pesan WA untuk owner juga jika mau.
+      /*
       let waNumber = order.customerPhone;
       if (waNumber.startsWith("0")) waNumber = "62" + waNumber.substring(1);
-      
-      const pesan = `*INVOICE TAGIHAN MTM*\n\nYth. Bapak/Ibu ${order.customerName},\nBerikut adalah rincian tagihan untuk pesanan Anda:\n\n*No Invoice:* ${order.invoice}\n*Jasa:* ${order.serviceName}\n*Driver:* ${driverName} (${driverVehicle})\n*Total Tagihan:* Rp ${order.totalPrice.toLocaleString('id-ID')}\n\nFile PDF Invoice telah kami kirimkan. Terima kasih telah menggunakan jasa kami.`;
+      let rincianPesananWA = `*Ongkir/Jasa:* Rp ${baseJasa.toLocaleString('id-ID')}`;
+      if (shoppingCost > 0) rincianPesananWA += `\n*Harga Barang Belanja:* Rp ${shoppingCost.toLocaleString('id-ID')}`;
+      if (urgentFee > 0) rincianPesananWA += `\n*Biaya Urgent:* Rp ${urgentFee.toLocaleString('id-ID')}`;
+
+      const pesan = `*INVOICE TAGIHAN MTM*\n\nYth. Bapak/Ibu ${order.customerName},\nBerikut adalah rincian tagihan untuk pesanan Anda:\n\n*No Invoice:* ${order.invoice}\n*Rincian Layanan:* ${order.serviceName}\n*Driver Tugas:* ${driverName} (${driverVehicle})\n\n${rincianPesananWA}\n------------------------\n*TOTAL TAGIHAN:* Rp ${currentTotal.toLocaleString('id-ID')}\n\nFile PDF Invoice lengkap telah kami lampirkan. Terima kasih telah menggunakan jasa kami.`;
       
       const waLink = `https://wa.me/${waNumber}?text=${encodeURIComponent(pesan)}`;
       window.open(waLink, '_blank');
+      */
 
     } catch (error) {
       console.error(error);
@@ -281,12 +341,17 @@ export default function OrderHistoryPage() {
 
   const exportToExcel = () => {
     if (filteredOrders.length === 0) return alert("Tidak ada data untuk diekspor!");
-    const headers = ["No,Invoice,Waktu,Nama Pelanggan,Jenis Jasa,Rincian Jasa,Kode Driver,Total Bayar,Potongan Owner,Pembayaran,Status,Link Foto Bukti\n"];
+    const headers = ["No,Invoice,Waktu,Nama Pelanggan,Layanan,Armada,Total Ongkir,Talangan Barang,Jatah Driver,Komisi Owner,Total Tagihan,Metode Bayar,Status\n"];
     const rows = filteredOrders.map((o, index) => {
-      const wkt = formatDate(o.createdAt).replace(/,/g, ''); 
-      const komisi = getOwnerCommission(o.commissionTier, o.totalPrice);
-      const linkFoto = o.proofUrl ? o.proofUrl : "Tidak Ada";
-      return `${index + 1},${o.invoice},${wkt},${o.customerName},${o.category},${o.serviceName},${o.driverCode || 'Belum Ada'},${o.totalPrice},${komisi},${o.paymentMethod},${o.status},${linkFoto}`;
+      const wkt = formatDateSafe(o.createdAt).replace(/,/g, ''); 
+      const ownerComm = getOwnerComm(o);
+      const driverNet = getDriverNet(o);
+      const baseJasa = Number(o.basePrice) || Number(o.totalPrice) || 0;
+      const belanja = Number(o.shoppingCost) || 0;
+      const urgentFee = Number(o.urgentFee) || 0;
+      const currentTotal = baseJasa + belanja + urgentFee;
+
+      return `${index + 1},${o.invoice},${wkt},${o.customerName},${o.serviceName},${o.driverCode || 'Kosong'},${baseJasa},${belanja},${driverNet},${ownerComm},${currentTotal},${o.paymentMethod},${o.status}`;
     }).join("\n");
 
     const blob = new Blob([headers + rows], { type: "text/csv" });
@@ -294,7 +359,7 @@ export default function OrderHistoryPage() {
     const a = document.createElement("a");
     a.setAttribute("hidden", "");
     a.setAttribute("href", url);
-    a.setAttribute("download", `Rekap_Pesanan_MTM_${new Date().toLocaleDateString('id-ID')}.csv`);
+    a.setAttribute("download", `Rekap_Keuangan_MTM_${new Date().toLocaleDateString('id-ID')}.csv`);
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -305,13 +370,13 @@ export default function OrderHistoryPage() {
       
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-6 mt-2 border-b border-slate-200 pb-5">
         <div>
-          <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Riwayat & Rekap Pesanan</h2>
+          <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Riwayat & Keuangan Pesanan</h2>
           <p className="text-slate-500 text-[13px] font-medium mt-1 flex items-center gap-1.5">
-            <Info size={14} className="text-blue-500" /> Pantau dan unduh rekapan data operasional dalam format Excel.
+            <Info size={14} className="text-blue-500" /> Pantau rincian biaya, pendapatan driver, komisi, serta unduh data ke Excel.
           </p>
         </div>
-        <button onClick={exportToExcel} disabled={isLoading || filteredOrders.length === 0} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-400 text-white font-bold py-2.5 px-5 rounded-xl transition-all shadow-sm active:scale-95 text-sm">
-          <FileDown size={16} /> Unduh Excel
+        <button onClick={exportToExcel} disabled={isLoading || filteredOrders.length === 0} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-400 text-white font-medium py-2.5 px-5 rounded-xl transition-all shadow-sm active:scale-95 text-sm">
+          <FileDown size={16} /> Unduh Excel Laporan
         </button>
       </div>
 
@@ -321,14 +386,14 @@ export default function OrderHistoryPage() {
           <input type="text" placeholder="Cari Invoice atau Pelanggan..." className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:bg-white focus:border-blue-500 transition-all text-[13px] font-medium" onChange={(e) => setSearchTerm(e.target.value)} />
         </div>
         <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto no-scrollbar">
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="px-3 py-2 border border-slate-200 rounded-lg text-[13px] font-bold text-slate-600 hover:bg-slate-50 outline-none cursor-pointer">
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="px-3 py-2 border border-slate-200 rounded-lg text-[13px] font-medium text-slate-600 hover:bg-slate-50 outline-none cursor-pointer">
             <option value="Semua">Semua Status</option>
             <option value="Menunggu">Menunggu</option>
             <option value="Proses">Proses</option>
             <option value="Selesai">Selesai</option>
             <option value="Batal">Batal</option>
           </select>
-          <button onClick={fetchAllData} className="flex items-center gap-1.5 px-3 py-2 border border-blue-200 bg-blue-50 rounded-lg text-[13px] font-bold text-blue-600 hover:bg-blue-100 whitespace-nowrap active:scale-95 transition-all">
+          <button onClick={fetchAllData} className="flex items-center gap-1.5 px-3 py-2 border border-blue-200 bg-blue-50 rounded-lg text-[13px] font-medium text-blue-600 hover:bg-blue-100 whitespace-nowrap active:scale-95 transition-all">
              Refresh Data
           </button>
         </div>
@@ -339,105 +404,148 @@ export default function OrderHistoryPage() {
           <table className="w-full text-left border-collapse whitespace-nowrap">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200">
-                <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest">No</th>
-                <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest">Invoice / Waktu</th>
-                <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest">Pelanggan</th>
-                <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest">Jasa / Rincian</th>
-                <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest">Armada / Driver</th>
-                <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Total Bayar</th>
-                <th className="px-4 py-3 text-[10px] font-black text-emerald-600 uppercase tracking-widest text-right">Owner</th>
-                <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Status</th>
-                <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Bukti</th>
-                <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Aksi</th>
+                <th className="px-4 py-3 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">No</th>
+                <th className="px-4 py-3 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Invoice / Waktu</th>
+                <th className="px-4 py-3 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Pelanggan</th>
+                <th className="px-4 py-3 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Layanan</th>
+                <th className="px-4 py-3 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Armada</th>
+                <th className="px-4 py-3 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Rincian Tagihan</th>
+                <th className="px-4 py-3 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Pendapatan</th>
+                <th className="px-4 py-3 text-[11px] font-semibold text-slate-500 uppercase tracking-wider text-center">Status</th>
+                <th className="px-4 py-3 text-[11px] font-semibold text-slate-500 uppercase tracking-wider text-center">Bukti / Aksi</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {isLoading ? (
                 <tr>
-                  <td colSpan={10} className="px-4 py-12 text-center">
+                  <td colSpan={9} className="px-4 py-12 text-center">
                     <Clock size={28} className="animate-spin text-slate-300 mx-auto mb-3" />
                     <p className="text-sm font-medium text-slate-500">Memuat data dari database...</p>
                   </td>
                 </tr>
               ) : paginatedOrders.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-4 py-12 text-center">
+                  <td colSpan={9} className="px-4 py-12 text-center">
                     <Search size={32} className="text-slate-300 mx-auto mb-3" />
                     <p className="text-sm font-medium text-slate-500">Pesanan tidak ditemukan.</p>
                   </td>
                 </tr>
               ) : (
-                paginatedOrders.map((order, index) => (
-                  <tr key={order.id} className="hover:bg-slate-50/80 transition-colors group">
-                    <td className="px-4 py-3 text-[13px] font-medium text-slate-400">
+                paginatedOrders.map((order, index) => {
+                  const currentBasePrice = Number(order.basePrice) || Number(order.totalPrice) || 0;
+                  const currentShopping = Number(order.shoppingCost) || 0;
+                  const currentUrgent = Number(order.urgentFee) || 0;
+                  const realTotal = currentBasePrice + currentShopping + currentUrgent;
+
+                  return (
+                  <tr key={order.id} className="hover:bg-slate-50/80 transition-colors group align-top">
+                    <td className="px-4 py-3 text-[12px] font-medium text-slate-500">
                       {(currentPage - 1) * itemsPerPage + index + 1}
                     </td>
                     <td className="px-4 py-3">
-                      <span className="text-[13px] font-bold text-blue-600">{order.invoice}</span>
-                      <p className="text-[10px] text-slate-400 font-medium mt-0.5">{formatDate(order.createdAt)}</p>
+                      <span className="text-[12px] font-semibold text-blue-600">{order.invoice}</span>
+                      <p className="text-[11px] text-slate-400 font-medium mt-0.5">{formatDateSafe(order.createdAt)}</p>
                     </td>
                     <td className="px-4 py-3">
-                      <p className="text-[13px] font-bold text-slate-700">{order.customerName}</p>
-                      <p className="text-[10px] font-medium text-slate-500 mt-0.5">{order.customerPhone}</p>
+                      <p className="text-[12px] font-medium text-slate-700">{order.customerName}</p>
+                      <p className="text-[11px] font-medium text-slate-500 mt-0.5">{order.customerPhone}</p>
                     </td>
                     <td className="px-4 py-3">
-                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-500 uppercase border border-slate-200 tracking-wider mb-1 inline-block">{order.category}</span>
-                      <p className="text-[12px] font-semibold text-slate-600 truncate max-w-[150px]">{order.serviceName}</p>
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-500 uppercase border border-slate-200 tracking-wider mb-1 inline-block">{order.category}</span>
+                      <p className="text-[11px] font-medium text-slate-600 truncate max-w-[150px]">{order.serviceName}</p>
                     </td>
-                    <td className="px-4 py-3 text-[12px] font-medium text-slate-600">
-                      {order.driverCode ? `Driver (${order.driverCode})` : <span className="text-slate-400 italic">Belum Ada</span>}
+                    
+                    {/* BAGIAN PENUGASAN ARMADA LANGSUNG DARI TABEL */}
+                    <td className="px-4 py-3 text-[12px] font-medium">
+                      {order.driverCode ? (
+                        <span className="text-slate-600 bg-white border border-slate-200 px-2 py-1 rounded shadow-sm">{order.driverCode}</span>
+                      ) : (
+                        <select 
+                          onChange={(e) => handleAssignDriver(order.id, e.target.value)}
+                          className="w-full max-w-[120px] px-2 py-1.5 bg-amber-50 border border-amber-200 text-amber-700 rounded text-[11px] font-medium outline-none cursor-pointer"
+                        >
+                          <option value="">Belum Ada</option>
+                          {drivers.map(d => <option key={d.code} value={d.code}>{d.name} ({d.code})</option>)}
+                        </select>
+                      )}
                     </td>
-                    <td className="px-4 py-3 text-[13px] font-black text-slate-800 text-right">
-                      Rp {order.totalPrice?.toLocaleString('id-ID')}
-                      <p className="text-[9px] font-bold text-slate-400 uppercase mt-0.5">{order.paymentMethod}</p>
+
+                    {/* BAGIAN RINCIAN TAGIHAN */}
+                    <td className="px-4 py-3">
+                      <div className="text-[11px] flex flex-col gap-1 w-32">
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Ongkir:</span> 
+                          <span className="text-slate-700 font-medium">Rp {currentBasePrice.toLocaleString('id-ID')}</span>
+                        </div>
+                        {currentShopping > 0 && (
+                          <div className="flex justify-between text-rose-600">
+                            <span>Talangan:</span> 
+                            <span className="font-medium">Rp {currentShopping.toLocaleString('id-ID')}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between font-semibold mt-0.5 pt-1 border-t border-slate-200">
+                          <span className="text-slate-600">Total:</span> 
+                          <span className="text-slate-800">Rp {realTotal.toLocaleString('id-ID')}</span>
+                        </div>
+                      </div>
                     </td>
-                    <td className="px-4 py-3 text-[13px] font-bold text-emerald-600 text-right">
-                      Rp {getOwnerCommission(order.commissionTier, order.totalPrice).toLocaleString('id-ID')}
+
+                    {/* BAGIAN PENDAPATAN DRIVER VS OWNER */}
+                    <td className="px-4 py-3">
+                      <div className="text-[11px] flex flex-col gap-1 w-32">
+                        <div className="flex justify-between text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded">
+                          <span>Driver:</span> 
+                          <span className="font-semibold">Rp {getDriverNet(order).toLocaleString('id-ID')}</span>
+                        </div>
+                        <div className="flex justify-between text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
+                          <span>Owner:</span> 
+                          <span className="font-semibold">Rp {getOwnerComm(order).toLocaleString('id-ID')}</span>
+                        </div>
+                      </div>
                     </td>
+
                     <td className="px-4 py-3 text-center">
                       {getStatusBadge(order.status)}
                     </td>
+                    
                     <td className="px-4 py-3 text-center">
-                      {order.proofUrl ? (
-                        <button onClick={() => setProofModal(order.proofUrl)} className="p-1.5 text-emerald-600 bg-emerald-50 border border-emerald-100 hover:bg-emerald-100 rounded-lg transition-all shadow-sm mx-auto flex">
-                          <Camera size={16} />
-                        </button>
-                      ) : (
-                        <span className="text-[10px] font-medium text-slate-400">-</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <div className="flex items-center justify-center gap-2">
+                      <div className="flex flex-wrap items-center justify-center gap-1.5 w-16 mx-auto">
+                        {order.proofUrl && (
+                          <button onClick={() => setProofModal(order.proofUrl)} className="p-1.5 text-emerald-600 bg-emerald-50 border border-emerald-100 hover:bg-emerald-100 rounded transition-all shadow-sm">
+                            <Camera size={14} />
+                          </button>
+                        )}
                         {(order.status === 'pending' || order.status === 'active') && (
-                          <button onClick={() => handleCancelOrder(order.id, order.invoice)} className="p-1.5 text-amber-600 bg-amber-50 border border-amber-100 hover:bg-amber-100 hover:text-amber-700 rounded-lg transition-all shadow-sm flex active:scale-95">
-                            <XCircle size={16} />
+                          <button onClick={() => handleCancelOrder(order.id, order.invoice)} className="p-1.5 text-amber-600 bg-amber-50 border border-amber-100 hover:bg-amber-100 hover:text-amber-700 rounded transition-all shadow-sm">
+                            <XCircle size={14} />
                           </button>
                         )}
                         {(order.status === 'completed' || order.status === 'cancelled') && (
-                          <button onClick={() => handleDeleteOrder(order.id, order.invoice)} className="p-1.5 text-rose-600 bg-rose-50 border border-rose-100 hover:bg-rose-100 hover:text-rose-700 rounded-lg transition-all shadow-sm flex active:scale-95">
-                            <Trash2 size={16} />
+                          <button onClick={() => handleDeleteOrder(order.id, order.invoice)} className="p-1.5 text-rose-600 bg-rose-50 border border-rose-100 hover:bg-rose-100 hover:text-rose-700 rounded transition-all shadow-sm">
+                            <Trash2 size={14} />
                           </button>
                         )}
                         {(order.status === 'active' || order.status === 'completed') && (
-                          <button onClick={() => handleGenerateInvoice(order)} disabled={isGeneratingPDF === order.id} className="p-1.5 text-blue-600 bg-blue-50 border border-blue-100 hover:bg-blue-100 hover:text-blue-700 rounded-lg transition-all shadow-sm flex active:scale-95 disabled:opacity-50">
-                            {isGeneratingPDF === order.id ? <Clock size={16} className="animate-spin" /> : <Send size={16} />}
+                          <button onClick={() => handleGenerateInvoice(order)} disabled={isGeneratingPDF === order.id} className="p-1.5 text-blue-600 bg-blue-50 border border-blue-100 hover:bg-blue-100 hover:text-blue-700 rounded transition-all shadow-sm disabled:opacity-50">
+                            {isGeneratingPDF === order.id ? <Clock size={14} className="animate-spin" /> : <Send size={14} />}
                           </button>
                         )}
                       </div>
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
+                );
+              })
+            )}
+          </tbody>
           </table>
         </div>
 
         <div className="px-4 py-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
-          <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">
+          <p className="text-[11px] font-medium text-slate-500 uppercase tracking-widest">
             Menampilkan {filteredOrders.length > 0 ? (currentPage - 1) * itemsPerPage + 1 : 0}-{Math.min(currentPage * itemsPerPage, filteredOrders.length)} dari {filteredOrders.length} data
           </p>
           <div className="flex gap-1.5 items-center">
-            <span className="text-xs font-bold text-slate-400 mr-2">Halaman {currentPage} / {totalPages || 1}</span>
+            <span className="text-[11px] font-medium text-slate-500 mr-2">Halaman {currentPage} / {totalPages || 1}</span>
             <button onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))} disabled={currentPage === 1} className="p-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"><ChevronLeft size={16} /></button>
             <button onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))} disabled={currentPage === totalPages || totalPages === 0} className="p-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"><ChevronRight size={16} /></button>
           </div>

@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { 
   Search, Plus, MapPin, Phone, Car, ShieldCheck, 
   MessageCircle, Wallet, CalendarDays, RefreshCw, X, Save,
-  Ban, CheckCircle2, Trash2
+  Ban, CheckCircle2, Trash2, MoreVertical
 } from "lucide-react";
 import { db } from "@/lib/firebase";
 import { collection, query, where, getDocs, doc, updateDoc, deleteDoc } from "firebase/firestore";
@@ -15,7 +15,7 @@ export default function DriverManagementPage() {
   const [drivers, setDrivers] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // KEMBALIKAN STATE CODE (USERNAME)
+  // STATE FORM MODAL
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [newDriver, setNewDriver] = useState({
@@ -45,7 +45,7 @@ export default function DriverManagementPage() {
   const handleAddDriver = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newDriver.code || !newDriver.name || !newDriver.phone) {
-      alert("Username, Nama, dan No WhatsApp wajib diisi!");
+      alert("Peringatan: Username, Nama, dan No WhatsApp wajib diisi!");
       return;
     }
 
@@ -98,7 +98,7 @@ export default function DriverManagementPage() {
 
   // LOGIKA HAPUS PERMANEN DRIVER
   const handleDeleteDriver = async (code: string, name: string) => {
-    if (confirm(`PERINGATAN KERAS!\nApakah Anda yakin ingin menghapus permanen data driver ${name} (${code})? Data tidak dapat dikembalikan!`)) {
+    if (confirm(`PERINGATAN KERAS!\nApakah Anda yakin ingin menghapus permanen data driver ${name} (${code})? Data ini tidak dapat dikembalikan!`)) {
       try {
         const q = query(collection(db, "drivers"), where("code", "==", code));
         const snap = await getDocs(q);
@@ -131,56 +131,61 @@ export default function DriverManagementPage() {
   });
 
   return (
-    <div className={`max-w-[1400px] mx-auto pb-20 transition-all duration-700 ${isLoaded ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}>
+    <div className={`max-w-[1400px] mx-auto pb-16 transition-all duration-700 ${isLoaded ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}>
       
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 mt-2 border-b border-slate-200 pb-5">
+      {/* HEADER PAGE */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-6 mt-2 border-b border-slate-200 pb-5">
         <div>
           <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Manajemen Armada & Driver</h2>
           <div className="flex items-center gap-1.5 mt-1 text-slate-500 text-[13px] font-medium">
             <CalendarDays size={14} className="text-blue-500" />
-            <span>Pantau total omzet dan kinerja armada Anda secara real-time.</span>
+            <span>Pantau total omzet dan kinerja mitra armada secara real-time.</span>
           </div>
         </div>
-        <div className="flex gap-2">
-          <button onClick={fetchDrivers} className="bg-blue-50 hover:bg-blue-100 text-blue-600 font-bold py-2.5 px-4 rounded-xl shadow-sm transition-all active:scale-95 flex items-center gap-2 text-sm border border-blue-200">
-            <RefreshCw size={16} className={isLoading ? "animate-spin" : ""} /> Segarkan
+        <div className="flex gap-2 w-full lg:w-auto">
+          <button onClick={fetchDrivers} className="flex-1 lg:flex-none bg-white hover:bg-slate-50 text-slate-700 font-semibold py-2.5 px-4 rounded-xl shadow-sm transition-all active:scale-95 flex items-center justify-center gap-2 text-sm border border-slate-200">
+            <RefreshCw size={16} className={isLoading ? "animate-spin text-blue-500" : "text-slate-400"} /> Segarkan
           </button>
-          
-          <button onClick={() => setIsAddModalOpen(true)} className="bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 px-5 rounded-xl shadow-sm transition-all active:scale-95 flex items-center gap-2 text-sm">
-            <Plus size={16} /> Tambah Mitra
+          <button onClick={() => setIsAddModalOpen(true)} className="flex-1 lg:flex-none bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 px-5 rounded-xl shadow-sm transition-all active:scale-95 flex items-center justify-center gap-2 text-sm">
+            <Plus size={16} /> Tambah Mitra Baru
           </button>
         </div>
       </div>
 
+      {/* FILTER & PENCARIAN */}
       <div className="bg-white border border-slate-200 rounded-xl p-3 mb-6 flex flex-col md:flex-row items-center justify-between shadow-sm gap-3">
-        <div className="relative w-full md:w-96">
+        <div className="relative w-full md:w-[400px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
           <input 
             type="text" 
-            placeholder="Cari nama driver, username, atau plat..." 
+            placeholder="Cari nama driver, username, atau plat nomor..." 
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all text-sm font-medium"
+            className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:bg-white focus:border-blue-400 transition-all text-[13px] font-medium"
           />
         </div>
-        <div className="text-sm font-bold text-slate-500 px-2">
-          Total Armada: <span className="text-blue-600">{filteredDrivers.length}</span> Driver
+        <div className="text-[13px] font-medium text-slate-500 px-2 flex items-center gap-2 bg-slate-50 py-1.5 px-3 rounded-lg border border-slate-100">
+          <Car size={16} className="text-slate-400"/>
+          Total Armada Aktif: <span className="font-bold text-blue-600 bg-blue-100 px-2 py-0.5 rounded">{filteredDrivers.length}</span>
         </div>
       </div>
 
+      {/* TAMPILAN KONDISIONAL (LOADING / KOSONG / GRID) */}
       {isLoading ? (
-        <div className="flex flex-col items-center justify-center py-20">
-          <RefreshCw size={40} className="animate-spin text-blue-500 mb-4" />
-          <p className="text-slate-500 font-bold">Memuat Data Armada...</p>
+        <div className="flex flex-col items-center justify-center py-20 opacity-60">
+          <RefreshCw size={36} className="animate-spin text-blue-500 mb-3" />
+          <p className="text-sm font-medium text-slate-500">Menyinkronkan data armada...</p>
         </div>
       ) : 
       
       filteredDrivers.length === 0 ? (
-        <div className="bg-white rounded-3xl border border-slate-200 p-16 text-center shadow-sm">
-          <Car size={48} className="text-slate-300 mx-auto mb-4" />
-          <h3 className="text-lg font-bold text-slate-700 mb-1">Belum Ada Mitra / Tidak Ditemukan</h3>
-          <p className="text-slate-500 text-sm mb-6">Anda belum mendaftarkan driver atau pencarian tidak cocok.</p>
-          <button onClick={() => setIsAddModalOpen(true)} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-xl shadow-sm transition-all active:scale-95 flex items-center gap-2 text-sm mx-auto">
+        <div className="bg-white rounded-2xl border border-slate-200 p-16 text-center shadow-sm">
+          <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4 border border-slate-100">
+            <Car size={36} className="text-slate-300" />
+          </div>
+          <h3 className="text-lg font-semibold text-slate-700 mb-1">Belum Ada Mitra / Tidak Ditemukan</h3>
+          <p className="text-slate-500 text-sm mb-6 max-w-md mx-auto">Anda belum mendaftarkan driver atau kata kunci pencarian tidak cocok dengan data manapun.</p>
+          <button onClick={() => setIsAddModalOpen(true)} className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-6 rounded-xl shadow-sm transition-all active:scale-95 flex items-center gap-2 text-sm mx-auto">
             <Plus size={16} /> Daftarkan Driver Pertama Anda
           </button>
         </div>
@@ -190,87 +195,107 @@ export default function DriverManagementPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
           {filteredDrivers.map((driver) => {
             const dStatus = driver.status || 'aktif';
+            const isSuspended = dStatus === 'suspend';
+            
             return (
-              <div key={driver.code} className={`bg-white rounded-[1.5rem] p-5 shadow-sm border ${dStatus === 'suspend' ? 'border-rose-200' : 'border-slate-200'} hover:shadow-md transition-all duration-300 group relative overflow-hidden flex flex-col`}>
-                <div className={`absolute top-0 right-0 w-24 h-24 rounded-bl-full -z-10 opacity-20 transition-colors ${dStatus === 'aktif' ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
-
-                <div className="flex justify-between items-start mb-5">
-                  <div className="flex gap-3 items-center">
+              <div key={driver.code} className={`bg-white rounded-2xl p-5 shadow-sm border transition-all duration-300 relative flex flex-col ${isSuspended ? 'border-rose-200 bg-rose-50/10' : 'border-slate-200 hover:border-blue-200 hover:shadow-md'}`}>
+                
+                {/* HEADER KARTU DRIVER */}
+                <div className="flex justify-between items-start mb-4">
+                  <div className="flex gap-3.5 items-center">
                     <div className="relative">
-                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-black text-lg border shadow-inner uppercase ${dStatus === 'suspend' ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-gradient-to-br from-slate-100 to-slate-200 text-slate-700 border-slate-300'}`}>
+                      <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg uppercase shadow-inner border ${isSuspended ? 'bg-rose-100 text-rose-600 border-rose-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
                         {driver.name ? driver.name.substring(0,2) : "DR"}
                       </div>
-                      <div className={`absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full border-2 border-white ${dStatus === 'aktif' ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
+                      <div className={`absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full border-2 border-white ${isSuspended ? 'bg-rose-500' : 'bg-emerald-500'}`} title={isSuspended ? 'Ditangguhkan' : 'Aktif'}></div>
                     </div>
                     <div>
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-bold text-slate-800 text-[15px] tracking-tight group-hover:text-blue-600 transition-colors line-clamp-1">
-                          {driver.name}
-                        </h3>
-                        <span className={`text-[10px] font-black px-1.5 py-0.5 rounded border uppercase ${dStatus === 'suspend' ? 'bg-rose-50 text-rose-600 border-rose-200' : 'bg-slate-100 text-slate-400 border-slate-200'}`}>
+                      <h3 className="font-bold text-slate-800 text-sm tracking-tight line-clamp-1 leading-snug">
+                        {driver.name}
+                      </h3>
+                      <div className="flex items-center gap-1.5 mt-1">
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded uppercase tracking-wider bg-slate-100 text-slate-500 border border-slate-200">
                           {driver.code}
                         </span>
+                        {isSuspended && (
+                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-rose-100 text-rose-600">
+                            Beku
+                          </span>
+                        )}
                       </div>
-                      <p className="text-[11px] font-semibold text-slate-500 flex items-center gap-1 mt-0.5">
-                        <MapPin size={10} className={dStatus === 'suspend' ? 'text-rose-500' : 'text-blue-500'} /> {driver.area || "Area belum ditentukan"}
-                      </p>
                     </div>
                   </div>
 
-                  {/* KOTAK AKSI (SUSPEND / HAPUS) */}
-                  <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-lg border border-slate-100">
+                  {/* KOTAK AKSI / DROPDOWN */}
+                  <div className="flex items-center gap-1.5">
                     <button 
                       onClick={() => handleToggleSuspend(driver.code, dStatus)}
-                      className={`p-1.5 rounded-md transition-colors active:scale-95 ${dStatus === 'suspend' ? 'bg-emerald-100 text-emerald-600 hover:bg-emerald-200' : 'bg-amber-100 text-amber-600 hover:bg-amber-200'}`}
-                      title={dStatus === 'suspend' ? 'Aktifkan Kembali' : 'Bekukan Akun'}
+                      className={`p-1.5 rounded-lg border transition-colors active:scale-95 ${isSuspended ? 'bg-emerald-50 border-emerald-200 text-emerald-600 hover:bg-emerald-100' : 'bg-amber-50 border-amber-200 text-amber-600 hover:bg-amber-100'}`}
+                      title={isSuspended ? 'Aktifkan Kembali' : 'Bekukan Akun'}
                     >
-                      {dStatus === 'suspend' ? <CheckCircle2 size={14} /> : <Ban size={14} />}
+                      {isSuspended ? <CheckCircle2 size={15} /> : <Ban size={15} />}
                     </button>
                     <button 
                       onClick={() => handleDeleteDriver(driver.code, driver.name)}
-                      className="p-1.5 rounded-md bg-rose-100 text-rose-600 hover:bg-rose-200 transition-colors active:scale-95"
+                      className="p-1.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-600 hover:bg-rose-100 transition-colors active:scale-95"
                       title="Hapus Permanen"
                     >
-                      <Trash2 size={14} />
+                      <Trash2 size={15} />
                     </button>
                   </div>
                 </div>
 
-                <div className={`rounded-xl p-3 border space-y-2 mb-5 ${dStatus === 'suspend' ? 'bg-rose-50/50 border-rose-100' : 'bg-slate-50 border-slate-100'}`}>
-                  <div className="flex items-center justify-between">
-                    <span className="flex items-center gap-2 text-[12px] font-medium text-slate-600">
-                      <Car size={14} className="text-slate-400" /> {driver.vehicle || "Kendaraan belum ditentukan"}
+                {/* INFO KONTAK & KENDARAAN */}
+                <div className="bg-slate-50 rounded-xl p-3.5 border border-slate-100 space-y-2.5 mb-4 flex-1">
+                  <div className="flex items-start gap-2">
+                    <Car size={14} className="text-slate-400 mt-0.5 shrink-0" />
+                    <span className="text-[11px] font-medium text-slate-600 leading-tight">
+                      {driver.vehicle || <span className="text-slate-400 italic">Kendaraan belum diatur</span>}
                     </span>
                   </div>
-                  <div className="flex items-center justify-between">
-                    <span className="flex items-center gap-2 text-[12px] font-medium text-slate-600">
-                      <Phone size={14} className="text-slate-400" /> {driver.phone || "-"}
+                  <div className="flex items-start gap-2">
+                    <MapPin size={14} className="text-slate-400 mt-0.5 shrink-0" />
+                    <span className="text-[11px] font-medium text-slate-600 leading-tight">
+                      {driver.area || <span className="text-slate-400 italic">Area operasional bebas</span>}
                     </span>
+                  </div>
+                  <div className="flex items-center justify-between pt-1">
+                    <div className="flex items-center gap-2">
+                      <Phone size={14} className="text-slate-400 shrink-0" />
+                      <span className="text-[11px] font-medium text-slate-600 font-mono">
+                        {driver.phone || "-"}
+                      </span>
+                    </div>
                     {driver.phone && (
-                      <button onClick={() => openWhatsApp(driver.phone)} className="text-[10px] font-bold text-emerald-600 bg-emerald-100 hover:bg-emerald-200 px-2 py-1 rounded flex items-center gap-1 transition-colors active:scale-95 shadow-sm">
-                        <MessageCircle size={12} /> Chat WA
+                      <button onClick={() => openWhatsApp(driver.phone)} className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2 py-1 rounded-md flex items-center gap-1 transition-colors active:scale-95">
+                        <MessageCircle size={12} /> WhatsApp
                       </button>
                     )}
                   </div>
                 </div>
 
-                <div className="mt-auto border-t border-slate-100 pt-4">
-                  <div className="flex items-center justify-around mb-4">
-                    <div className="text-center flex-1">
-                      <div className="flex items-center justify-center gap-1.5 text-[15px] font-black text-slate-800">
-                        <ShieldCheck size={16} className="text-blue-500" /> {driver.completedOrders || 0}
-                      </div>
-                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-0.5 block">Selesai Total</span>
+                {/* STATISTIK KINERJA */}
+                <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100 mt-auto">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 bg-blue-50 text-blue-600 rounded-lg shrink-0">
+                      <ShieldCheck size={16} />
                     </div>
-                    <div className="w-px h-8 bg-slate-200"></div>
-                    <div className="text-center flex-1">
-                      <div className="flex items-center justify-center gap-1.5 text-[14px] font-black text-slate-800 whitespace-nowrap">
-                        <Wallet size={16} className="text-emerald-500" /> Rp {(driver.totalRevenue || 0).toLocaleString('id-ID')}
-                      </div>
-                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-0.5 block">Total Omzet</span>
+                    <div>
+                      <p className="text-[9px] font-medium text-slate-400 uppercase tracking-widest">Selesai</p>
+                      <p className="text-sm font-bold text-slate-800">{driver.completedOrders || 0} <span className="text-[10px] text-slate-400 font-normal">Pesanan</span></p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 bg-emerald-50 text-emerald-600 rounded-lg shrink-0">
+                      <Wallet size={16} />
+                    </div>
+                    <div>
+                      <p className="text-[9px] font-medium text-slate-400 uppercase tracking-widest">Omzet</p>
+                      <p className="text-sm font-bold text-slate-800 tracking-tight">Rp {(driver.totalRevenue || 0).toLocaleString('id-ID')}</p>
                     </div>
                   </div>
                 </div>
+
               </div>
             );
           })}
@@ -280,48 +305,48 @@ export default function DriverManagementPage() {
       {/* MODAL POP-UP TAMBAH MITRA DRIVER */}
       {isAddModalOpen && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in zoom-in duration-300">
-          <div className="bg-white rounded-[2rem] shadow-2xl max-w-lg w-full relative overflow-hidden flex flex-col">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full relative overflow-hidden flex flex-col">
             
-            <div className="p-6 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+            <div className="p-5 border-b border-slate-100 bg-slate-50/80 flex justify-between items-center">
               <div>
-                <h3 className="font-extrabold text-lg text-slate-800">Pendaftaran Mitra Baru</h3>
-                <p className="text-xs text-slate-500 font-medium">Buat akun untuk driver armada Anda.</p>
+                <h3 className="font-bold text-slate-800 flex items-center gap-2"><Car size={18} className="text-blue-500" /> Pendaftaran Mitra Baru</h3>
+                <p className="text-[11px] text-slate-500 font-medium mt-0.5">Buat kredensial akun untuk driver armada Anda.</p>
               </div>
-              <button onClick={() => setIsAddModalOpen(false)} className="p-2 bg-white text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-full transition-colors border border-slate-200">
-                <X size={20} />
+              <button onClick={() => setIsAddModalOpen(false)} className="p-1.5 bg-white text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-full transition-colors border border-slate-200">
+                <X size={18} />
               </button>
             </div>
 
             <form onSubmit={handleAddDriver} className="p-6 space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 ml-1">Username Driver <span className="text-rose-500">*</span></label>
-                  <input required type="text" placeholder="Contoh: budi_cepat" value={newDriver.code} onChange={(e) => setNewDriver({...newDriver, code: e.target.value})} className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:bg-white focus:border-blue-500 text-sm font-bold" />
+                  <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest ml-1">Username (Kode) <span className="text-rose-500">*</span></label>
+                  <input required type="text" placeholder="Cth: budi123" value={newDriver.code} onChange={(e) => setNewDriver({...newDriver, code: e.target.value.toLowerCase()})} className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-sm font-semibold text-slate-700" />
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 ml-1">No. WhatsApp <span className="text-rose-500">*</span></label>
-                  <input required type="tel" placeholder="0812..." value={newDriver.phone} onChange={(e) => setNewDriver({...newDriver, phone: e.target.value})} className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:bg-white focus:border-blue-500 text-sm font-medium" />
+                  <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest ml-1">No. WhatsApp <span className="text-rose-500">*</span></label>
+                  <input required type="tel" placeholder="0812..." value={newDriver.phone} onChange={(e) => setNewDriver({...newDriver, phone: e.target.value})} className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-sm font-medium" />
                 </div>
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 ml-1">Nama Lengkap <span className="text-rose-500">*</span></label>
-                <input required type="text" placeholder="Masukkan nama lengkap driver" value={newDriver.name} onChange={(e) => setNewDriver({...newDriver, name: e.target.value})} className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:bg-white focus:border-blue-500 text-sm font-medium" />
+                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest ml-1">Nama Lengkap <span className="text-rose-500">*</span></label>
+                <input required type="text" placeholder="Masukkan nama lengkap driver" value={newDriver.name} onChange={(e) => setNewDriver({...newDriver, name: e.target.value})} className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-sm font-medium" />
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 ml-1">Area Operasional</label>
-                <input type="text" placeholder="Contoh: Malang Kota, Kepanjen, dll" value={newDriver.area} onChange={(e) => setNewDriver({...newDriver, area: e.target.value})} className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:bg-white focus:border-blue-500 text-sm font-medium" />
+                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest ml-1">Area Operasional (Opsional)</label>
+                <input type="text" placeholder="Contoh: Malang Kota, Kepanjen, dll" value={newDriver.area} onChange={(e) => setNewDriver({...newDriver, area: e.target.value})} className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-sm font-medium" />
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 ml-1">Kendaraan & Plat Nomor</label>
-                <input type="text" placeholder="Contoh: Vario (N 1234 AB)" value={newDriver.vehicle} onChange={(e) => setNewDriver({...newDriver, vehicle: e.target.value})} className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:bg-white focus:border-blue-500 text-sm font-medium" />
+                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest ml-1">Kendaraan & Plat (Opsional)</label>
+                <input type="text" placeholder="Contoh: Vario Hitam (N 1234 AB)" value={newDriver.vehicle} onChange={(e) => setNewDriver({...newDriver, vehicle: e.target.value})} className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-sm font-medium" />
               </div>
 
               <div className="pt-4 mt-2 border-t border-slate-100">
-                <button type="submit" disabled={isSubmitting} className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 text-white font-bold py-3.5 rounded-xl shadow-md transition-all active:scale-[0.98]">
-                  {isSubmitting ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
+                <button type="submit" disabled={isSubmitting} className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 text-white font-semibold py-3.5 rounded-xl shadow-md transition-all active:scale-95 text-sm">
+                  {isSubmitting ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />}
                   {isSubmitting ? "Menyimpan Data..." : "Simpan Mitra Baru"}
                 </button>
               </div>

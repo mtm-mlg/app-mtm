@@ -4,7 +4,8 @@ import { useRouter } from "next/navigation";
 import { 
   User, MapPin, Package, Clock, Car, 
   ArrowRight, ShieldCheck, Phone, Map, 
-  Hammer, Brain, Calculator, Info, Flame, Weight
+  Hammer, Brain, Calculator, Info, Flame, Weight,
+  ShoppingCart
 } from "lucide-react";
 
 export default function NewOrderPage() {
@@ -34,10 +35,12 @@ export default function NewOrderPage() {
   // STATE INFO PELANGGAN
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
-  const [customerAddress, setCustomerAddress] = useState(""); // <-- STATE BARU UNTUK ALAMAT
+  const [customerAddress, setCustomerAddress] = useState(""); 
 
-  // STATE KATEGORI
-  const [selectedCategory, setSelectedCategory] = useState("Jarak");
+  // ========================================================
+  // STATE KATEGORI (SEKARANG ARRAY AGAR BISA PILIH LEBIH DARI 1)
+  // ========================================================
+  const [selectedCategories, setSelectedCategories] = useState<string[]>(["Jarak"]);
   
   // STATE CUSTOM INPUT JASA
   const [customServiceName, setCustomServiceName] = useState("");
@@ -63,13 +66,31 @@ export default function NewOrderPage() {
   // STATE SUBMIT FORM
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // FUNGSI TOGGLE KATEGORI (BISA NYALA BANYAK SEKALIGUS)
+  const toggleCategory = (id: string) => {
+    if (selectedCategories.includes(id)) {
+      // Jangan izinkan kosong, minimal 1 kategori harus nyala
+      if (selectedCategories.length > 1) {
+        setSelectedCategories(selectedCategories.filter(cat => cat !== id));
+      }
+    } else {
+      setSelectedCategories([...selectedCategories, id]);
+    }
+  };
+
   // HELPER GANTI SATUAN OTOMATIS SAAT KATEGORI BERUBAH
   useEffect(() => {
-    if (selectedCategory === "Jarak") setUnit("KM");
-    if (selectedCategory === "Tenaga") setUnit("Pekerja/Paket");
-    if (selectedCategory === "Waktu") setUnit("Jam");
-    if (selectedCategory === "Pikiran") setUnit("Project");
-  }, [selectedCategory]);
+    if (selectedCategories.length > 1) {
+      setUnit("Paket/Mix");
+    } else {
+      const cat = selectedCategories[0];
+      if (cat === "Jarak") setUnit("KM");
+      if (cat === "Tenaga") setUnit("Pekerja/Paket");
+      if (cat === "Waktu") setUnit("Jam");
+      if (cat === "Pikiran") setUnit("Project");
+      if (cat === "Belanja") setUnit("Toko/Tempat");
+    }
+  }, [selectedCategories]);
 
   // HELPER GANTI PERSENTASE SAAT KRITERIA BERUBAH
   const handleTierChange = (tier: string) => {
@@ -103,18 +124,22 @@ export default function NewOrderPage() {
     }
   };
 
+  // ========================================================
   // KALKULATOR TOTAL
+  // ========================================================
   const numBasePrice = Number(basePrice) || 0;
-  const numQty = selectedCategory === "Waktu" && unit === "Borongan/Flat" ? 1 : (Number(quantity) || 1);
-  const subtotal = numBasePrice * numQty;
+  const numQty = selectedCategories.includes("Waktu") && unit === "Borongan/Flat" ? 1 : (Number(quantity) || 1);
+  const subtotalJasa = numBasePrice * numQty; // Ini yang kena komisi
+  
   const numUrgentFee = isUrgent ? (Number(urgentFee) || 0) : 0;
-  const totalHarga = subtotal + numUrgentFee;
+  
+  // Total harga di owner hanya menghitung Tarif Jasa + Urgent (Talangan belanja diset oleh driver nanti)
+  const totalHarga = subtotalJasa + numUrgentFee;
 
   // ========================================================
   // FUNGSI SUBMIT KE FIREBASE BACKEND
   // ========================================================
   const submitOrder = async () => {
-    // VALIDASI DIPERBARUI: Wajib isi alamat
     if (!customerName || !customerPhone || !customerAddress || !customServiceName || !basePrice) {
       alert("Peringatan: Nama Pelanggan, No WA, Alamat, Nama Jasa, dan Tarif Dasar wajib diisi!");
       return;
@@ -123,7 +148,6 @@ export default function NewOrderPage() {
     setIsSubmitting(true);
 
     try {
-      // 1. Ambil data pesanan sebelumnya untuk menghitung nomor urut (Sequence)
       const ordersRes = await fetch("/api/orders");
       const ordersData = await ordersRes.json();
       
@@ -141,24 +165,23 @@ export default function NewOrderPage() {
         countThisMonth = thisMonthOrders.length;
       }
 
-      // 2. Buat Nomor Invoice dengan format: INV-YYYYMMOOO (Contoh: INV-202604001)
       const sequenceNumber = String(countThisMonth + 1).padStart(3, '0'); 
       const generatedInvoice = `INV-${currentYear}${currentMonth}${sequenceNumber}`;
 
-      // 3. Susun data final yang akan dikirim ke database
       const orderData = {
         invoice: generatedInvoice, 
         customerName,
         customerPhone,
-        customerAddress, // <-- DATA ALAMAT DIKIRIM KE BACKEND
-        category: selectedCategory,
+        customerAddress, 
+        category: selectedCategories.join(", "), 
         serviceName: customServiceName,
-        basePrice: numBasePrice,
+        basePrice: numBasePrice, 
+        shoppingCost: 0, // <-- Di-set 0 dari sisi Owner. Driver yang akan update nilai ini di aplikasinya.
         unit,
         quantity: numQty,
         commissionTier,
-        origin: selectedCategory === "Jarak" ? origin : null,
-        destination: selectedCategory === "Jarak" ? destination : null,
+        origin: selectedCategories.includes("Jarak") ? origin : null,
+        destination: selectedCategories.includes("Jarak") ? destination : null,
         driverCode: driverCode || null,
         paymentMethod,
         isUrgent,
@@ -166,7 +189,6 @@ export default function NewOrderPage() {
         totalPrice: totalHarga,
       };
 
-      // 4. Tembakkan ke Backend!
       const res = await fetch("/api/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -191,6 +213,7 @@ export default function NewOrderPage() {
   const categories = [
     { id: "Jarak", icon: MapPin, color: "text-blue-600 bg-blue-50 border-blue-200" },
     { id: "Tenaga", icon: Hammer, color: "text-orange-600 bg-orange-50 border-orange-200" },
+    { id: "Belanja", icon: ShoppingCart, color: "text-rose-600 bg-rose-50 border-rose-200" },
     { id: "Waktu", icon: Clock, color: "text-emerald-600 bg-emerald-50 border-emerald-200" },
     { id: "Pikiran", icon: Brain, color: "text-purple-600 bg-purple-50 border-purple-200" }
   ];
@@ -222,7 +245,7 @@ export default function NewOrderPage() {
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 ml-1">Nama Lengkap <span className="text-rose-500">*</span></label>
+                <label className="text-xs font-bold text-slate-700 ml-1">Nama Lengkap</label>
                 <div className="flex items-center w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-100 transition-all overflow-hidden">
                   <User size={16} className="text-slate-400 mr-2 shrink-0" />
                   <input 
@@ -235,7 +258,7 @@ export default function NewOrderPage() {
                 </div>
               </div>
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 ml-1">Nomor WhatsApp <span className="text-rose-500">*</span></label>
+                <label className="text-xs font-bold text-slate-700 ml-1">Nomor WhatsApp</label>
                 <div className="flex items-center w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-100 transition-all overflow-hidden">
                   <Phone size={16} className="text-slate-400 mr-2 shrink-0" />
                   <input 
@@ -250,7 +273,7 @@ export default function NewOrderPage() {
 
               {/* KOLOM ALAMAT/LINK LOKASI */}
               <div className="space-y-1.5 md:col-span-2">
-                <label className="text-xs font-bold text-slate-700 ml-1">Alamat Lengkap / Link Maps Pelanggan <span className="text-rose-500">*</span></label>
+                <label className="text-xs font-bold text-slate-700 ml-1">Alamat Lengkap / Link Maps Pelanggan</label>
                 <div className="flex items-center w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-100 transition-all overflow-hidden">
                   <MapPin size={16} className="text-slate-400 mr-2 shrink-0" />
                   <input 
@@ -262,7 +285,6 @@ export default function NewOrderPage() {
                   />
                 </div>
               </div>
-
             </div>
           </div>
 
@@ -273,24 +295,28 @@ export default function NewOrderPage() {
               <h3 className="text-lg font-bold text-slate-800 tracking-tight">Detail Rincian Jasa (Custom)</h3>
             </div>
             
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-              {categories.map((cat) => (
-                <button
-                  key={cat.id}
-                  onClick={() => setSelectedCategory(cat.id)}
-                  className={`p-3 rounded-xl flex flex-col items-center justify-center gap-1.5 transition-all duration-200 border-2 ${
-                    selectedCategory === cat.id 
-                    ? `border-${cat.color.split(' ')[0].split('-')[1]}-500 ${cat.color} shadow-sm` 
-                    : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
-                  }`}
-                >
-                  <cat.icon size={20} strokeWidth={selectedCategory === cat.id ? 2.5 : 2} />
-                  <span className="text-xs font-bold">{cat.id}</span>
-                </button>
-              ))}
+            <p className="text-xs text-slate-500 mb-3 font-medium">Bisa pilih lebih dari satu kategori (Multi-Jasa):</p>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+              {categories.map((cat) => {
+                const isSelected = selectedCategories.includes(cat.id);
+                return (
+                  <button
+                    key={cat.id}
+                    onClick={() => toggleCategory(cat.id)}
+                    className={`p-3 rounded-xl flex flex-col items-center justify-center gap-1.5 transition-all duration-200 border-2 ${
+                      isSelected 
+                      ? `border-${cat.color.split(' ')[0].split('-')[1]}-500 ${cat.color} shadow-sm scale-105` 
+                      : "border-slate-200 bg-white text-slate-400 hover:bg-slate-50"
+                    }`}
+                  >
+                    <cat.icon size={20} strokeWidth={isSelected ? 2.5 : 2} />
+                    <span className="text-[11px] font-bold">{cat.id}</span>
+                  </button>
+                );
+              })}
             </div>
 
-            {selectedCategory === "Jarak" && (
+            {selectedCategories.includes("Jarak") && (
               <div className="mb-6 animate-in fade-in slide-in-from-top-2 bg-blue-50 p-4 rounded-2xl border border-blue-100 shadow-sm">
                 <label className="text-xs font-extrabold text-blue-800 ml-1 flex items-center gap-1.5 mb-3">
                   <Map size={14} /> Kalkulator Jarak Otomatis
@@ -330,34 +356,34 @@ export default function NewOrderPage() {
 
             <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-5">
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 ml-1">Nama Jasa / Pekerjaan <span className="text-rose-500">*</span></label>
+                <label className="text-xs font-bold text-slate-700 ml-1">Nama Jasa / Rincian Pekerjaan</label>
                 <input 
                   type="text" 
                   value={customServiceName}
                   onChange={(e) => setCustomServiceName(e.target.value)}
-                  placeholder={`Contoh: ${selectedCategory === 'Jarak' ? 'Antar Dokumen ke Stasiun' : selectedCategory === 'Waktu' ? 'Sewa Driver Luar Kota' : 'Bongkar Muat Barang'}`} 
+                  placeholder={`Contoh: ${selectedCategories.includes('Belanja') ? 'Beli Nasi Goreng & Antar ke Stasiun' : 'Antar Dokumen ke Stasiun'}`} 
                   className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100 transition-all text-slate-800 text-sm font-bold" 
                 />
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 ml-1">Tarif Dasar <span className="text-rose-500">*</span></label>
-                  <div className="flex items-center w-full px-4 py-3 bg-white border border-slate-300 rounded-xl focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-100 transition-all overflow-hidden">
-                    <span className="text-slate-400 font-bold mr-2 text-xs border-r border-slate-200 pr-2">Rp</span>
+                  <label className="text-xs font-bold text-blue-700 ml-1">Tarif Dasar / Ongkir Jasa</label>
+                  <div className="flex items-center w-full px-4 py-3 bg-white border border-blue-200 rounded-xl focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-100 transition-all overflow-hidden">
+                    <span className="text-blue-400 font-bold mr-2 text-xs border-r border-blue-200 pr-2">Rp</span>
                     <input 
                       type="number" 
                       value={basePrice}
                       onChange={(e) => setBasePrice(Number(e.target.value) || "")}
                       placeholder="0" 
-                      className="flex-1 w-full bg-transparent border-0 outline-none p-0 text-slate-800 font-extrabold text-base" 
+                      className="flex-1 w-full bg-transparent border-0 outline-none p-0 text-blue-800 font-extrabold text-base" 
                     />
                   </div>
                 </div>
 
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold text-slate-700 ml-1">Satuan</label>
-                  {selectedCategory === "Waktu" ? (
+                  {selectedCategories.length === 1 && selectedCategories[0] === "Waktu" ? (
                     <select 
                       value={unit}
                       onChange={(e) => setUnit(e.target.value)}
@@ -447,7 +473,6 @@ export default function NewOrderPage() {
                     className="flex-1 w-full bg-transparent border-0 outline-none p-0 text-slate-800 text-sm font-bold appearance-none cursor-pointer"
                   >
                     <option value="">-- Lempar ke Semua (Tanpa Ditugaskan) --</option>
-                    {/* DAFTAR DRIVER DINAMIS */}
                     {availableDrivers.map(driver => (
                       <option key={driver.code} value={driver.code}>
                         {driver.name} ({driver.code}) - {driver.area}
@@ -512,19 +537,24 @@ export default function NewOrderPage() {
                 
                 <div className="space-y-2.5 mb-4 border-b border-dashed border-slate-300 pb-4">
                   <div className="flex justify-between items-center">
-                    <span className="text-xs font-semibold text-slate-500">Subtotal ({numQty} {unit})</span>
-                    <span className="text-sm font-bold text-slate-700">Rp {subtotal.toLocaleString('id-ID')}</span>
+                    <span className="text-xs font-semibold text-slate-500">Subtotal Jasa ({numQty} {unit})</span>
+                    <span className="text-sm font-bold text-slate-700">Rp {subtotalJasa.toLocaleString('id-ID')}</span>
                   </div>
                   {isUrgent && (
                     <div className="flex justify-between items-center">
-                      <span className="text-xs font-semibold text-rose-500 flex items-center gap-1"><Flame size={10} /> Biaya Urgent</span>
-                      <span className="text-sm font-bold text-rose-600">Rp {numUrgentFee.toLocaleString('id-ID')}</span>
+                      <span className="text-xs font-semibold text-amber-500 flex items-center gap-1"><Flame size={10} /> Biaya Urgent</span>
+                      <span className="text-sm font-bold text-amber-600">Rp {numUrgentFee.toLocaleString('id-ID')}</span>
+                    </div>
+                  )}
+                  {selectedCategories.includes("Belanja") && (
+                    <div className="mt-2 text-[10px] text-rose-500 italic bg-rose-50 p-2 rounded-lg border border-rose-100">
+                      *Terdapat barang belanjaan yang estimasi harganya akan ditambahkan oleh driver saat pesanan dikerjakan.
                     </div>
                   )}
                 </div>
 
                 <div className="flex justify-between items-end bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm">
-                  <span className="text-xs font-bold text-slate-800 uppercase tracking-widest">Total Bayar</span>
+                  <span className="text-xs font-bold text-slate-800 uppercase tracking-widest">Total Bayar Sementara</span>
                   <span className="text-2xl font-black text-slate-900 tracking-tighter">
                     <span className="text-sm text-slate-400 mr-1">Rp</span>{totalHarga.toLocaleString('id-ID')}
                   </span>

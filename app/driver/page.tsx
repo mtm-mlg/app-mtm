@@ -2,15 +2,21 @@
 import { useState, useEffect } from "react";
 import { 
   Power, MapPin, Navigation, Clock, ShieldCheck, 
-  ArrowRight, Phone, AlertCircle, Wallet, CheckCircle2, User, Camera, UploadCloud, RefreshCw, LogOut
+  ArrowRight, Phone, AlertCircle, Wallet, CheckCircle2, User, Camera, 
+  UploadCloud, RefreshCw, LogOut, ShoppingCart, FileDown, Send
 } from "lucide-react";
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
+import { db } from "@/lib/firebase";
+import { doc, getDoc, updateDoc } from "firebase/firestore"; 
 
 export default function DriverDashboard() {
   const [isOnline, setIsOnline] = useState(false);
   const [activeOrder, setActiveOrder] = useState<any>(null);
   
-  // STATE PROFIL & STATISTIK DRIVER
   const [driverName, setDriverName] = useState<string>("");
+  const [driverVehicle, setDriverVehicle] = useState<string>("");
+  const [driverPhone, setDriverPhone] = useState<string>("");
   const [completedCount, setCompletedCount] = useState(0);
   const [dailyRevenue, setDailyRevenue] = useState(0);
   
@@ -20,23 +26,30 @@ export default function DriverDashboard() {
 
   const [proofFile, setProofFile] = useState<File | null>(null);
   const [proofPreview, setProofPreview] = useState<string | null>(null);
+  
+  const [shoppingInput, setShoppingInput] = useState<number | "">("");
+  const [settings, setSettings] = useState<any>(null);
+  const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
 
   useEffect(() => {
     const session = localStorage.getItem("mtm_user");
     if (session) {
       setDriverCode(session);
-      
-      // 💡 DAYA INGAT: Cek apakah sebelumnya driver sedang online?
       const savedOnlineStatus = localStorage.getItem(`mtm_online_${session}`);
-      if (savedOnlineStatus === "true") {
-        setIsOnline(true);
-      }
+      if (savedOnlineStatus === "true") setIsOnline(true);
     } else {
       window.location.href = "/";
     }
+
+    const fetchSettings = async () => {
+      try {
+        const docSnap = await getDoc(doc(db, "settings", "global"));
+        if (docSnap.exists()) setSettings(docSnap.data());
+      } catch (e) {}
+    };
+    fetchSettings();
   }, []);
 
-  // 💡 DAYA INGAT: Simpan status setiap kali tombol power ditekan
   const toggleOnline = () => {
     const newStatus = !isOnline;
     setIsOnline(newStatus);
@@ -47,44 +60,79 @@ export default function DriverDashboard() {
 
   const handleLogout = () => {
     if (isOnline) {
-      alert("Harap matikan tombol Power (Offline) terlebih dahulu sebelum keluar!");
+      alert("Harap matikan status Online terlebih dahulu sebelum keluar dari aplikasi!");
       return;
     }
-    
     if (confirm("Apakah Anda yakin ingin keluar dari akun Driver?")) {
       localStorage.removeItem("mtm_user");
-      // Opsional: Hapus ingatan online saat logout
       if (driverCode) localStorage.removeItem(`mtm_online_${driverCode}`);
       window.location.href = "/"; 
     }
   };
 
-  // FUNGSI TARIK DATA 100% REAL-TIME DARI DATABASE
+  // ========================================================
+  // LOGIKA RADAR CERDAS (MEMBACA PREFERENSI DRIVER)
+  // ========================================================
   const fetchActiveOrder = async () => {
     if (!isOnline || !driverCode) return;
     
     setIsLoadingOrder(true);
     try {
-      const resOrder = await fetch(`/api/driver/orders?driverCode=${driverCode}`);
+      const resOrder = await fetch(`/api/orders`);
       const resultOrder = await resOrder.json();
       
-      if (resultOrder.success) {
-        const allOrders = resultOrder.data;
-        const currentActive = allOrders.find((o:any) => o.status === 'pending' || o.status === 'active');
-        setActiveOrder(currentActive || null);
-      }
-
       const resProfile = await fetch("/api/drivers");
       const resultProfile = await resProfile.json();
       
+      let myProfile = null;
+      let myPrefs = { jarak: true, tenaga: true, waktu: true, pikiran: true, belanja: true };
+
       if (resultProfile.success) {
-        const myProfile = resultProfile.data.find((d: any) => d.code === driverCode);
+        myProfile = resultProfile.data.find((d: any) => d.code === driverCode);
         if (myProfile) {
           setDriverName(myProfile.name);
+          setDriverVehicle(myProfile.vehicle || "-");
+          setDriverPhone(myProfile.phone || "-");
           setCompletedCount(myProfile.completedOrders || 0);
-          
           const myIncome = (myProfile.totalRevenue || 0) - (myProfile.ownerCommission || 0);
           setDailyRevenue(myIncome);
+          
+          if (myProfile.preferences) {
+            myPrefs = { ...myPrefs, ...myProfile.preferences };
+          }
+        }
+      }
+
+      if (resultOrder.success) {
+        const allOrders = resultOrder.data;
+        
+        let currentTarget = allOrders.find((o:any) => o.status === 'active' && o.driverCode === driverCode);
+        
+        if (!currentTarget) {
+          currentTarget = allOrders.find((o:any) => {
+            const isPending = o.status === 'pending';
+            const isForMeOrAll = o.driverCode === driverCode || !o.driverCode || o.driverCode === "";
+            
+            // PENCOCOKAN KATEGORI PESANAN DENGAN PREFERENSI DRIVER
+            let catKey = "";
+            const catLower = o.category?.toLowerCase() || "";
+            if (catLower.includes("jarak")) catKey = "jarak";
+            else if (catLower.includes("tenaga")) catKey = "tenaga";
+            else if (catLower.includes("waktu")) catKey = "waktu";
+            else if (catLower.includes("pikiran")) catKey = "pikiran";
+            else if (catLower.includes("belanja")) catKey = "belanja";
+
+            // Jika kategori tidak dikenali, tetap dibiarkan masuk. Jika dikenali, cek apakah tombolnya NYALA.
+            const isPrefEnabled = catKey === "" || myPrefs[catKey as keyof typeof myPrefs] === true;
+
+            return isPending && isForMeOrAll && isPrefEnabled;
+          });
+        }
+
+        setActiveOrder(currentTarget || null);
+        
+        if (currentTarget && shoppingInput === "") {
+           setShoppingInput(currentTarget.shoppingCost || "");
         }
       }
     } catch (error) {
@@ -98,7 +146,7 @@ export default function DriverDashboard() {
     let interval: NodeJS.Timeout;
     if (isOnline) {
       fetchActiveOrder(); 
-      interval = setInterval(fetchActiveOrder, 10000); 
+      interval = setInterval(fetchActiveOrder, 7000); 
     } else {
       setActiveOrder(null); 
     }
@@ -114,281 +162,277 @@ export default function DriverDashboard() {
     }
   };
 
+  const formatDateTime = (dateString: string) => {
+    if (!dateString) return "-";
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return "-"; 
+    return new Intl.DateTimeFormat('id-ID', {
+      day: '2-digit', month: 'short', year: 'numeric',
+      hour: '2-digit', minute: '2-digit'
+    }).format(date);
+  };
+
+  const handleGenerateInvoice = async (sendWa: boolean) => {
+    if (!settings) { alert("Sedang memuat pengaturan. Mohon tunggu."); return; }
+    const numTalangan = Number(shoppingInput) || 0;
+    if (activeOrder.category?.includes('Belanja') && numTalangan === 0) {
+       alert("Peringatan: Untuk pesanan Belanja, Anda wajib mengisi Nominal Talangan!"); return;
+    }
+    setIsGeneratingPDF(true);
+    try {
+      const config = settings.invoiceConfig || {};
+      const payInfo = settings.paymentInfo || {};
+      const baseJasa = activeOrder.basePrice || activeOrder.totalPrice || 0;
+      const urgentFee = activeOrder.urgentFee || 0;
+      const currentTotal = baseJasa + numTalangan + urgentFee;
+
+      const invoiceElement = document.createElement("div");
+      invoiceElement.style.cssText = "position:absolute;left:-9999px;top:-9999px;width:800px;background:white;color:#1e293b;font-family:Arial;padding:40px;";
+      
+      invoiceElement.innerHTML = `
+        ${config.showLogo ? `<div style="text-align:center;margin-bottom:30px;border-bottom:2px solid #e2e8f0;padding-bottom:20px;">
+            ${settings.companyInfo?.logoUrl ? `<img src="${settings.companyInfo.logoUrl}" style="height:60px;margin-bottom:10px;object-fit:contain;" crossorigin="anonymous"/>` : ''}
+            <h1 style="font-size:32px;font-weight:900;margin:0;">${settings.companyInfo?.name || 'MTM APP'}</h1>
+            <p style="font-size:14px;color:#64748b;letter-spacing:4px;margin-top:5px;">INVOICE TAGIHAN</p>
+          </div>` : ''}
+        <div style="display:flex;justify-content:space-between;margin-bottom:30px;">
+          <div><p style="font-size:14px;color:#64748b;margin:0 0 5px 0;">Ditagihkan Kepada:</p><h2 style="font-size:20px;font-weight:bold;margin:0;">${activeOrder.customerName}</h2><p style="font-size:14px;margin:5px 0 0 0;">${activeOrder.customerPhone}</p><p style="font-size:14px;margin:5px 0 0 0;">Alamat: ${activeOrder.customerAddress || "-"}</p></div>
+          <div style="text-align:right;"><p style="font-size:14px;color:#64748b;margin:0 0 5px 0;">Nomor Invoice:</p><h2 style="font-size:20px;font-weight:bold;color:#2563eb;margin:0;">${activeOrder.invoice}</h2><p style="font-size:14px;margin:5px 0 0 0;">Tanggal: ${formatDateTime(activeOrder.createdAt)}</p></div>
+        </div>
+        <div style="background-color:#f8fafc;padding:20px;border-radius:8px;border:1px solid #e2e8f0;margin-bottom:30px;"><h3 style="font-size:16px;margin:0 0 10px 0;border-bottom:1px solid #cbd5e1;padding-bottom:5px;">INFO DRIVER</h3><div style="display:flex;justify-content:space-between;font-size:14px;"><div>Nama: <strong>${driverName}</strong></div><div>Kontak: <strong>${driverPhone}</strong></div><div>Plat: <strong>${driverVehicle}</strong></div></div></div>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:30px;">
+          <tr style="background-color:#f1f5f9;border-bottom:2px solid #cbd5e1;"><th style="padding:10px;text-align:left;">DESKRIPSI JASA</th><th style="padding:10px;text-align:right;">QTY</th><th style="padding:10px;text-align:right;">TARIF</th><th style="padding:10px;text-align:right;">SUBTOTAL</th></tr>
+          <tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:15px 10px;font-weight:bold;">${activeOrder.serviceName} <div style="font-size:12px;font-weight:normal;color:#64748b;">Ongkos Kirim / Jasa</div></td><td style="padding:15px 10px;text-align:right;">${activeOrder.quantity || 1} ${activeOrder.unit || 'Pcs'}</td><td style="padding:15px 10px;text-align:right;">Rp ${baseJasa.toLocaleString('id-ID')}</td><td style="padding:15px 10px;text-align:right;font-weight:bold;">Rp ${baseJasa.toLocaleString('id-ID')}</td></tr>
+          ${numTalangan > 0 ? `<tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:15px 10px;font-weight:bold;color:#e11d48;">Talangan Barang</td><td style="padding:15px 10px;text-align:right;">1</td><td style="padding:15px 10px;text-align:right;">Rp ${numTalangan.toLocaleString('id-ID')}</td><td style="padding:15px 10px;text-align:right;font-weight:bold;color:#e11d48;">Rp ${numTalangan.toLocaleString('id-ID')}</td></tr>` : ''}
+          ${urgentFee > 0 ? `<tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:15px 10px;font-weight:bold;color:#d97706;">Biaya Urgent</td><td style="padding:15px 10px;text-align:right;">1</td><td style="padding:15px 10px;text-align:right;">Rp ${urgentFee.toLocaleString('id-ID')}</td><td style="padding:15px 10px;text-align:right;font-weight:bold;color:#d97706;">Rp ${urgentFee.toLocaleString('id-ID')}</td></tr>` : ''}
+        </table>
+        <div style="display:flex;justify-content:flex-end;margin-bottom:40px;"><div style="background-color:#f8fafc;padding:15px 30px;border-radius:8px;border:1px solid #cbd5e1;min-width:300px;"><div style="display:flex;justify-content:space-between;font-size:16px;align-items:center;"><span>Total Tagihan</span><strong style="font-size:24px;">Rp ${currentTotal.toLocaleString('id-ID')}</strong></div></div></div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:40px;">
+          <div style="flex:1;margin-right:20px;display:flex;">
+            ${config.showBank ? `<div style="flex:1;"><h4 style="font-size:14px;font-weight:bold;border-bottom:1px solid #cbd5e1;padding-bottom:5px;margin-bottom:10px;">TRANSFER BANK</h4><p style="font-size:12px;margin:0 0 2px 0;">${payInfo.bankName || '-'}</p><p style="font-size:16px;font-weight:bold;color:#2563eb;margin:0;">${payInfo.accountNumber || '-'}</p><p style="font-size:12px;margin:2px 0 0 0;">A/N: ${payInfo.accountName || '-'}</p></div>` : ''}
+            ${config.showQris ? `<div style="text-align:center;"><h4 style="font-size:14px;font-weight:bold;border-bottom:1px solid #cbd5e1;padding-bottom:5px;margin-bottom:10px;">SCAN QRIS</h4>${payInfo.qrisUrl ? `<img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(payInfo.qrisUrl)}" style="width:80px;height:80px;border:1px solid #ccc;padding:5px;border-radius:8px;" crossorigin="anonymous" />` : ''}</div>` : ''}
+          </div>
+          <div style="width:200px;text-align:center;padding-top:10px;"><p style="font-size:14px;margin:0 0 50px 0;">Terima Kasih,</p><p style="font-size:16px;font-weight:bold;border-bottom:1px solid #0f172a;display:inline-block;padding-bottom:2px;margin:0;">${driverName}</p></div>
+        </div>
+      `;
+
+      document.body.appendChild(invoiceElement);
+      const canvas = await html2canvas(invoiceElement, { scale: 2, useCORS: true });
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      pdf.addImage(canvas.toDataURL('image/jpeg', 1.0), 'JPEG', 0, 0, pdf.internal.pageSize.getWidth(), (canvas.height * pdf.internal.pageSize.getWidth()) / canvas.width);
+      document.body.removeChild(invoiceElement);
+      pdf.save(`Invoice_${activeOrder.invoice}.pdf`);
+
+      if (sendWa) {
+        let wa = activeOrder.customerPhone;
+        if (wa.startsWith("0")) wa = "62" + wa.substring(1);
+        let rincian = `*Ongkir/Jasa:* Rp ${baseJasa.toLocaleString('id-ID')}`;
+        if (numTalangan > 0) rincian += `\n*Talangan:* Rp ${numTalangan.toLocaleString('id-ID')}`;
+        if (urgentFee > 0) rincian += `\n*Urgent:* Rp ${urgentFee.toLocaleString('id-ID')}`;
+
+        const pesan = `*INVOICE TAGIHAN*\nYth. ${activeOrder.customerName},\n\n*Invoice:* ${activeOrder.invoice}\n*Layanan:* ${activeOrder.serviceName}\n*Driver:* ${driverName}\n\n${rincian}\n------------------------\n*TOTAL:* Rp ${currentTotal.toLocaleString('id-ID')}\n\nTerima kasih!`;
+        window.open(`https://wa.me/${wa}?text=${encodeURIComponent(pesan)}`, '_blank');
+      }
+
+    } catch (error) { alert("Gagal memproses PDF."); } finally { setIsGeneratingPDF(false); }
+  };
+
   const handleOrderStatus = async (newStatus: string) => {
     if (!activeOrder) return;
-    
-    if (newStatus === 'completed' && !proofFile) {
-      alert("Harap unggah foto bukti penyelesaian terlebih dahulu!");
-      return;
-    }
+    if (newStatus === 'completed' && !proofFile) return alert("Harap unggah foto bukti!");
+    const isBelanja = activeOrder.category?.includes('Belanja');
+    if (newStatus === 'completed' && isBelanja && (shoppingInput === "" || shoppingInput === 0)) return alert("Wajib isi Nominal Uang Talangan!");
 
     setIsProcessing(true);
     let uploadedProofUrl = null;
 
     try {
       if (newStatus === 'completed' && proofFile) {
-        const CLOUD_NAME = "dwprlhbzb"; 
-        const UPLOAD_PRESET = "mtm-mlg";  
-
         const formData = new FormData();
         formData.append("file", proofFile);
-        formData.append("upload_preset", UPLOAD_PRESET);
+        formData.append("upload_preset", "mtm-mlg");
 
-        const cloudinaryRes = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`, {
-          method: "POST",
-          body: formData,
-        });
-
+        const cloudinaryRes = await fetch(`https://api.cloudinary.com/v1_1/dwprlhbzb/image/upload`, { method: "POST", body: formData });
         const cloudinaryData = await cloudinaryRes.json();
-        if (cloudinaryData.secure_url) {
-          uploadedProofUrl = cloudinaryData.secure_url;
-        } else {
-          throw new Error("Gagal mengunggah gambar ke Cloudinary");
-        }
+        if (cloudinaryData.secure_url) uploadedProofUrl = cloudinaryData.secure_url;
       }
 
-      const res = await fetch('/api/driver/orders/update', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          orderId: activeOrder.id, 
-          status: newStatus,
-          proofUrl: uploadedProofUrl 
-        })
-      });
-      
-      const result = await res.json();
-      
-      if (result.success) {
-        if (newStatus === 'active') {
-          alert("Pesanan Diterima! Silakan menuju lokasi.");
-        } else if (newStatus === 'completed') {
-          alert("Pekerjaan Selesai! Bukti foto telah terkirim.");
-          setProofFile(null); 
-          setProofPreview(null);
-        }
-        fetchActiveOrder(); 
-      } else {
-        alert("Gagal memperbarui status: " + result.error);
+      const numTalangan = Number(shoppingInput) || 0;
+      const baseJasa = activeOrder.basePrice || 0;
+      const urgentFee = activeOrder.urgentFee || 0;
+      const newTotalPrice = baseJasa + numTalangan + urgentFee;
+
+      const orderRef = doc(db, "orders", activeOrder.id);
+      const updateData: any = { status: newStatus, driverCode: driverCode };
+      if (newStatus === 'completed') {
+         updateData.proofUrl = uploadedProofUrl;
+         updateData.shoppingCost = numTalangan;
+         updateData.totalPrice = newTotalPrice;
       }
-    } catch (error) {
-      alert("Terjadi kesalahan jaringan atau upload gagal.");
-    } finally {
-      setIsProcessing(false);
-    }
+
+      await updateDoc(orderRef, updateData);
+      
+      if (newStatus === 'active') alert("Berhasil Diklaim! Hati-hati di jalan.");
+      else if (newStatus === 'completed') {
+        alert(`Tugas Selesai! Tagihan ke pelanggan: Rp ${newTotalPrice.toLocaleString('id-ID')}`);
+        setProofFile(null); setProofPreview(null); setShoppingInput("");
+      }
+      fetchActiveOrder(); 
+      
+    } catch (error) { alert("Terjadi kesalahan jaringan."); } finally { setIsProcessing(false); }
   };
 
-
   return (
-    <div className="max-w-[1200px] mx-auto animate-in fade-in duration-500">
+    <div className="max-w-[1200px] mx-auto animate-in fade-in duration-500 pb-10">
       
-      <div className="bg-white rounded-3xl p-6 md:p-8 shadow-sm border border-slate-200 mb-6 flex flex-col md:flex-row md:items-center justify-between gap-6 relative overflow-hidden">
+      <div className="bg-white rounded-2xl md:rounded-3xl p-5 md:p-8 shadow-sm border border-slate-200 mb-6 flex flex-col md:flex-row md:items-center justify-between gap-5 relative overflow-hidden">
         <div className={`absolute -top-24 -right-10 w-64 h-64 rounded-full blur-3xl opacity-10 transition-colors duration-700 pointer-events-none ${isOnline ? 'bg-emerald-500' : 'bg-slate-400'}`}></div>
 
         <div className="flex items-center gap-4 relative z-10">
-          <div className="w-14 h-14 md:w-16 md:h-16 rounded-full bg-slate-100 border border-slate-200 shadow-inner flex items-center justify-center font-black text-slate-500 text-lg md:text-xl shrink-0 uppercase">
+          <div className="w-12 h-12 md:w-16 md:h-16 rounded-xl md:rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-center font-bold text-slate-500 text-lg md:text-xl shrink-0 uppercase">
             {driverCode.substring(0, 2)}
           </div>
           <div>
-            <h2 className="font-extrabold text-slate-800 text-xl md:text-2xl leading-tight capitalize">
-              {driverName || `Driver ${driverCode}`}
-            </h2>
-            <p className="text-xs md:text-sm font-semibold text-slate-500 flex items-center gap-1.5">
-              Kode Akun: <span className="uppercase text-blue-600 font-bold">{driverCode}</span>
-            </p>
+            <h2 className="font-bold text-slate-800 text-lg md:text-xl leading-tight capitalize">{driverName || `Driver ${driverCode}`}</h2>
+            <p className="text-xs font-medium text-slate-500 mt-0.5">Kode: <span className="uppercase text-blue-600 font-semibold">{driverCode}</span></p>
           </div>
         </div>
         
-        <div className="flex items-center gap-3 relative z-10 w-full md:w-auto">
-          
-          <div className={`flex-1 md:flex-none py-3 md:py-3.5 px-4 rounded-2xl flex items-center justify-center gap-2 text-sm font-bold transition-colors ${
+        <div className="flex items-center gap-2.5 relative z-10 w-full md:w-auto">
+          <div className={`flex-1 md:flex-none py-3 px-4 rounded-xl flex items-center justify-center gap-2 text-xs md:text-sm font-semibold transition-colors ${
             isOnline ? "bg-emerald-50 text-emerald-600 border border-emerald-100" : "bg-slate-50 text-slate-500 border border-slate-200"
           }`}>
-            <div className={`w-2.5 h-2.5 rounded-full ${isOnline ? "bg-emerald-500 animate-pulse" : "bg-slate-400"}`}></div>
-            {isOnline ? "ONLINE" : "OFFLINE"}
+            <div className={`w-2 h-2 rounded-full ${isOnline ? "bg-emerald-500 animate-pulse" : "bg-slate-400"}`}></div>
+            {isOnline ? "ONLINE AKTIF" : "SEDANG OFFLINE"}
           </div>
 
-          <button 
-            onClick={toggleOnline}
-            className={`w-12 h-12 md:w-14 md:h-14 rounded-2xl flex items-center justify-center shadow-md transition-all duration-300 active:scale-95 shrink-0 ${
-              isOnline ? "bg-emerald-500 hover:bg-emerald-600 text-white shadow-emerald-500/30" : "bg-slate-800 hover:bg-slate-900 text-white"
-            }`}
-            title={isOnline ? "Matikan (Offline)" : "Nyalakan (Online)"}
-          >
-            <Power size={24} strokeWidth={2.5} />
+          <button onClick={toggleOnline} className={`w-11 h-11 md:w-12 md:h-12 rounded-xl flex items-center justify-center shadow-sm transition-all active:scale-95 shrink-0 ${isOnline ? "bg-emerald-500 hover:bg-emerald-600 text-white" : "bg-slate-800 hover:bg-slate-900 text-white"}`}>
+            <Power size={20} strokeWidth={2.5} />
           </button>
-
-          <button 
-            onClick={handleLogout}
-            className="w-12 h-12 md:w-14 md:h-14 rounded-2xl flex items-center justify-center shadow-sm transition-all duration-300 active:scale-95 shrink-0 bg-white border border-slate-200 text-rose-500 hover:bg-rose-50 hover:border-rose-200 hover:text-rose-600"
-            title="Keluar dari Portal Driver"
-          >
-            <LogOut size={24} strokeWidth={2.5} />
+          <button onClick={handleLogout} className="w-11 h-11 md:w-12 md:h-12 rounded-xl flex items-center justify-center shadow-sm transition-all active:scale-95 shrink-0 bg-white border border-slate-200 text-rose-500 hover:bg-rose-50 hover:border-rose-200">
+            <LogOut size={20} strokeWidth={2.5} />
           </button>
-
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        
-        <div className="lg:col-span-5 space-y-6">
-          <div className="bg-slate-900 rounded-3xl p-6 md:p-8 text-white shadow-lg relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-40 h-40 bg-blue-500/20 rounded-bl-full blur-2xl"></div>
-            <p className="text-xs md:text-sm font-bold text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-1.5">
-              <Wallet size={16} /> Pendapatan Bersih
-            </p>
-            
-            <h1 className="text-4xl md:text-5xl font-black text-white mb-8 tracking-tight">
-              Rp {dailyRevenue.toLocaleString('id-ID')}
-            </h1>
-            
-            <div className="flex items-center gap-6 border-t border-slate-700/50 pt-5">
-              <div>
-                <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Pesanan Selesai</p>
-                <p className="text-lg font-black flex items-center gap-1.5">
-                  <ShieldCheck size={18} className="text-blue-400"/> {completedCount} Order
-                </p>
-              </div>
-              <div className="w-px h-10 bg-slate-700"></div>
-              <div>
-                <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Status Dompet</p>
-                <p className="text-lg font-black text-emerald-400">Aktif</p>
-              </div>
+        <div className="lg:col-span-4 space-y-6">
+          <div className="bg-slate-900 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden">
+            <div className="absolute -top-10 -right-10 w-32 h-32 bg-blue-500/20 rounded-full blur-2xl"></div>
+            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-1.5"><Wallet size={14} /> Saldo Pendapatan</p>
+            <h1 className="text-3xl md:text-4xl font-bold text-white mb-6 tracking-tight">Rp {dailyRevenue.toLocaleString('id-ID')}</h1>
+            <div className="flex items-center gap-5 border-t border-slate-700/50 pt-4">
+              <div><p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider mb-1">Tugas Selesai</p><p className="text-base font-semibold flex items-center gap-1.5"><ShieldCheck size={14} className="text-blue-400"/> {completedCount}</p></div>
+              <div className="w-px h-8 bg-slate-700"></div>
+              <div><p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider mb-1">Status</p><p className="text-base font-semibold text-emerald-400">Aktif</p></div>
             </div>
           </div>
         </div>
 
-        <div className="lg:col-span-7">
+        <div className="lg:col-span-8">
           <div className="flex items-center justify-between mb-4 px-1">
-            <h3 className="text-base md:text-lg font-bold text-slate-800 uppercase tracking-widest">Radar Pesanan</h3>
+            <h3 className="text-sm md:text-base font-bold text-slate-800 uppercase tracking-wider">Radar Pesanan</h3>
           </div>
           
           {!isOnline && (
-            <div className="bg-slate-100/50 border-2 border-dashed border-slate-200 rounded-3xl p-10 flex flex-col items-center justify-center text-center min-h-[300px]">
-              <div className="bg-white p-4 rounded-full mb-4 shadow-sm border border-slate-100">
-                <Power size={36} className="text-slate-300" />
-              </div>
-              <h4 className="font-extrabold text-slate-600 text-lg mb-1">Anda Sedang Offline</h4>
-              <p className="text-sm text-slate-500 font-medium max-w-sm">Tekan tombol Power di atas untuk mulai menerima dan mencari pesanan di sekitar Anda.</p>
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-8 flex flex-col items-center justify-center text-center min-h-[250px]">
+              <div className="bg-white p-4 rounded-full mb-4 shadow-sm border border-slate-100"><Power size={32} className="text-slate-300" /></div>
+              <h4 className="font-bold text-slate-600 text-base mb-1">Status Offline</h4>
+              <p className="text-xs text-slate-500 font-medium">Nyalakan tombol Power di atas untuk mulai bekerja.</p>
             </div>
           )}
 
           {isOnline && isLoadingOrder && !activeOrder && (
-             <div className="bg-blue-50/50 border border-blue-100 rounded-3xl p-10 flex flex-col items-center justify-center text-center min-h-[300px]">
-                <div className="relative mb-6">
+             <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-8 flex flex-col items-center justify-center text-center min-h-[250px]">
+                <div className="relative mb-5">
                   <div className="absolute inset-0 bg-blue-400 rounded-full animate-ping opacity-20"></div>
-                  <div className="bg-white p-4 rounded-full shadow-md border border-blue-100 relative z-10">
-                    <Navigation size={36} className="text-blue-500 animate-pulse" />
-                  </div>
+                  <div className="bg-white p-3 rounded-full shadow-sm border border-blue-100 relative z-10"><RefreshCw size={28} className="text-blue-500 animate-spin" /></div>
                 </div>
-                <h4 className="font-extrabold text-blue-800 text-lg mb-1">Menyinkronkan Data...</h4>
+                <h4 className="font-semibold text-blue-800 text-sm">Menyinkronkan Radar...</h4>
              </div>
           )}
 
           {isOnline && !isLoadingOrder && !activeOrder && (
-            <div className="bg-blue-50/50 border border-blue-100 rounded-3xl p-10 flex flex-col items-center justify-center text-center min-h-[300px]">
-              <div className="relative mb-6">
+            <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-8 flex flex-col items-center justify-center text-center min-h-[250px]">
+              <div className="relative mb-5">
                 <div className="absolute inset-0 bg-blue-400 rounded-full animate-ping opacity-20"></div>
-                <div className="bg-white p-4 rounded-full shadow-md border border-blue-100 relative z-10">
-                  <Navigation size={36} className="text-blue-500 animate-pulse" />
-                </div>
+                <div className="bg-white p-3 rounded-full shadow-sm border border-blue-100 relative z-10"><Navigation size={28} className="text-blue-500" /></div>
               </div>
-              <h4 className="font-extrabold text-blue-800 text-lg mb-1">Menunggu Pesanan...</h4>
-              <p className="text-sm text-blue-600/80 font-medium max-w-sm">Sistem kami sedang mencari pesanan yang ditugaskan ke Anda.</p>
+              <h4 className="font-semibold text-blue-800 text-base mb-1">Mencari Pesanan...</h4>
+              <p className="text-xs text-blue-600/80 font-medium max-w-xs mx-auto">Mencari tugas sesuai preferensi kategori yang Anda pilih di menu Profil.</p>
             </div>
           )}
 
           {isOnline && activeOrder && (
-            <div className={`rounded-3xl border-2 shadow-lg overflow-hidden animate-in slide-in-from-bottom-6 duration-500 ${activeOrder.status === 'pending' ? 'bg-white border-amber-400 shadow-amber-400/20' : 'bg-white border-emerald-500 shadow-emerald-500/20'}`}>
-              
-              <div className={`${activeOrder.status === 'pending' ? 'bg-amber-400 text-amber-950' : 'bg-emerald-500 text-white'} text-xs md:text-sm font-black p-3 md:p-4 text-center uppercase tracking-widest flex items-center justify-center gap-2`}>
-                {activeOrder.status === 'pending' ? <><AlertCircle size={18} /> Pesanan Baru Masuk!</> : <><Navigation size={18} /> Pesanan Sedang Berjalan</>}
+            <div className={`rounded-2xl border bg-white shadow-sm overflow-hidden animate-in slide-in-from-bottom-4 duration-300 ${activeOrder.status === 'pending' ? 'border-amber-300' : 'border-emerald-400'}`}>
+              <div className={`${activeOrder.status === 'pending' ? 'bg-amber-100 text-amber-800' : 'bg-emerald-500 text-white'} text-xs font-bold p-3 text-center uppercase tracking-wider flex items-center justify-center gap-2`}>
+                {activeOrder.status === 'pending' ? <><AlertCircle size={16} /> Pesanan Baru Masuk!</> : <><Navigation size={16} /> Sedang Berjalan</>}
               </div>
               
-              <div className="p-6 md:p-8">
-                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4 mb-6">
+              <div className="p-5 md:p-6">
+                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4 mb-5 border-b border-slate-100 pb-5">
                   <div>
-                    <span className="text-[10px] md:text-xs font-black text-slate-500 bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200 mb-2 inline-block uppercase">{activeOrder.invoice} • {activeOrder.category}</span>
-                    <h4 className="font-black text-xl md:text-2xl text-slate-800">{activeOrder.serviceName}</h4>
-                    <p className="text-sm font-bold text-slate-500 mt-1 flex items-center gap-1.5"><User size={14}/> {activeOrder.customerName}</p>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-[9px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 uppercase">{activeOrder.invoice}</span>
+                      <span className="text-[9px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded uppercase border border-slate-200">{activeOrder.category}</span>
+                    </div>
+                    <h4 className="font-bold text-lg text-slate-800 leading-snug">{activeOrder.serviceName}</h4>
+                    <div className="mt-3 space-y-1.5">
+                      <p className="text-xs font-medium text-slate-600 flex items-center gap-2"><User size={14} className="text-slate-400"/> {activeOrder.customerName}</p>
+                      <p className="text-xs font-medium text-slate-600 flex items-center gap-2"><Phone size={14} className="text-slate-400"/> {activeOrder.customerPhone}</p>
+                      <p className="text-xs font-medium text-slate-600 flex items-start gap-2"><MapPin size={14} className="text-slate-400 shrink-0 mt-0.5"/> {activeOrder.customerAddress}</p>
+                    </div>
                   </div>
-                  <div className="sm:text-right">
-                    <h3 className="text-3xl font-black text-emerald-600">Rp {activeOrder.totalPrice?.toLocaleString('id-ID')}</h3>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase mt-1">Pembayaran: {activeOrder.paymentMethod}</p>
+                  
+                  <div className="sm:text-right bg-slate-50 p-4 rounded-xl border border-slate-200 sm:min-w-[160px]">
+                    <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Total Tagihan Sementara</p>
+                    <h3 className="text-xl font-bold text-emerald-600 mt-0.5">Rp {((activeOrder.basePrice || 0) + (Number(shoppingInput) || 0) + (activeOrder.urgentFee || 0)).toLocaleString('id-ID')}</h3>
+                    <span className="inline-block mt-2 text-[9px] font-bold px-2 py-1 bg-white border border-slate-200 rounded text-slate-600 uppercase">Via: {activeOrder.paymentMethod}</span>
                   </div>
                 </div>
 
-                {activeOrder.category === 'Jarak' && activeOrder.origin && activeOrder.destination && (
-                  <div className="bg-slate-50 p-4 md:p-5 rounded-2xl border border-slate-100 relative mb-8">
-                    <div className="absolute top-8 bottom-8 left-[31px] w-0.5 bg-slate-200 dashed"></div>
-                    
-                    <div className="flex gap-4 relative mb-6">
-                      <div className="w-6 h-6 rounded-full border-4 border-white bg-blue-500 shadow-sm shrink-0 relative z-10"></div>
-                      <div>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Jemput</p>
-                        <p className="text-sm md:text-base font-bold text-slate-800">{activeOrder.origin}</p>
-                      </div>
-                    </div>
-                    
-                    <div className="flex gap-4 relative">
-                      <div className="w-6 h-6 rounded-full border-4 border-white bg-rose-500 shadow-sm shrink-0 relative z-10"></div>
-                      <div>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Antar (Tujuan)</p>
-                        <p className="text-sm md:text-base font-bold text-slate-800">{activeOrder.destination}</p>
-                      </div>
+                {activeOrder.status === 'active' && activeOrder.category?.includes('Belanja') && (
+                  <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 mb-5">
+                    <h4 className="text-rose-700 font-semibold text-sm mb-2.5 flex items-center gap-1.5"><ShoppingCart size={14} /> Total Uang Belanja (Struk)</h4>
+                    <div className="flex items-center w-full px-3 py-2 bg-white border border-rose-200 rounded-lg focus-within:border-rose-400 transition-colors">
+                      <span className="text-rose-400 font-semibold text-sm mr-2 pr-2 border-r border-rose-100">Rp</span>
+                      <input type="number" value={shoppingInput} onChange={(e) => setShoppingInput(Number(e.target.value) || "")} placeholder="Harga barang..." className="flex-1 w-full bg-transparent border-0 outline-none text-rose-700 font-bold text-sm" />
                     </div>
                   </div>
                 )}
 
                 {activeOrder.status === 'active' && (
-                  <div className="mt-6 mb-6 p-5 bg-slate-50 rounded-2xl border border-slate-200 border-dashed text-center">
-                    <h4 className="text-sm font-bold text-slate-700 mb-3 flex items-center justify-center gap-2">
-                      <Camera size={16} className="text-slate-500"/> Foto Bukti Selesai
-                    </h4>
-                    
+                  <div className="grid grid-cols-2 gap-2.5 mb-5">
+                    <button onClick={() => handleGenerateInvoice(false)} disabled={isGeneratingPDF} className="bg-white border border-blue-200 text-blue-600 hover:bg-blue-50 font-semibold py-2.5 rounded-lg flex justify-center items-center gap-1.5 text-xs transition-all active:scale-95"><FileDown size={14} /> {isGeneratingPDF ? "Memproses..." : "Lihat / Simpan Struk"}</button>
+                    <button onClick={() => handleGenerateInvoice(true)} disabled={isGeneratingPDF} className="bg-emerald-50 border border-emerald-200 text-emerald-600 hover:bg-emerald-100 font-semibold py-2.5 rounded-lg flex justify-center items-center gap-1.5 text-xs transition-all active:scale-95"><Send size={14} /> Kirim WA ke Pelanggan</button>
+                  </div>
+                )}
+
+                {activeOrder.status === 'active' && (
+                  <div className="mb-5 p-4 bg-slate-50 rounded-xl border border-slate-200 text-center">
+                    <h4 className="text-xs font-semibold text-slate-600 mb-2.5 flex items-center justify-center gap-1.5"><Camera size={14} /> Foto Bukti Selesai</h4>
                     {proofPreview ? (
                       <div className="relative inline-block">
-                        <img src={proofPreview} alt="Bukti" className="w-full max-w-xs h-40 object-cover rounded-xl border-2 border-emerald-500 shadow-sm" />
-                        <button onClick={() => { setProofFile(null); setProofPreview(null); }} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1 shadow-md">
-                           <AlertCircle size={16} />
-                        </button>
+                        <img src={proofPreview} alt="Bukti" className="h-32 object-contain rounded-lg border border-slate-300" />
+                        <button onClick={() => { setProofFile(null); setProofPreview(null); }} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1 shadow-sm"><AlertCircle size={14} /></button>
                       </div>
                     ) : (
-                      <label className="cursor-pointer bg-white border border-slate-300 hover:border-blue-500 hover:bg-blue-50 text-slate-600 font-bold py-3 px-4 rounded-xl transition-all flex flex-col items-center justify-center shadow-sm w-full">
-                        <UploadCloud size={24} className="mb-2 text-blue-500" />
-                        <span className="text-sm">Ketuk untuk Buka Kamera / Galeri</span>
-                        <input 
-                          type="file" 
-                          accept="image/*" 
-                          capture="environment" 
-                          className="hidden" 
-                          onChange={handlePhotoChange} 
-                        />
+                      <label className="cursor-pointer bg-white border border-slate-300 hover:border-blue-400 text-blue-600 font-medium py-3 px-4 rounded-lg flex flex-col items-center justify-center shadow-sm w-full text-xs transition-colors">
+                        <UploadCloud size={20} className="mb-1" /> Buka Kamera
+                        <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhotoChange} />
                       </label>
                     )}
                   </div>
                 )}
 
-                <div className="flex flex-col sm:flex-row gap-3 mt-4">
+                <div className="pt-2 border-t border-slate-100">
                   {activeOrder.status === 'pending' ? (
-                    <button 
-                      onClick={() => handleOrderStatus('active')}
-                      disabled={isProcessing}
-                      className="flex-1 bg-slate-900 hover:bg-blue-600 text-white font-bold py-4 rounded-xl active:scale-[0.98] transition-all text-base shadow-md flex items-center justify-center gap-2"
-                    >
-                      {isProcessing ? <Clock className="animate-spin" size={18} /> : "Terima Pesanan"} <ArrowRight size={18} />
+                    <button onClick={() => handleOrderStatus('active')} disabled={isProcessing} className="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3.5 rounded-xl shadow-sm flex items-center justify-center gap-2 active:scale-95 transition-all text-sm">
+                      {isProcessing ? <Clock className="animate-spin" size={16} /> : "Terima & Klaim Pesanan"} <ArrowRight size={16} />
                     </button>
                   ) : (
-                    <button 
-                      onClick={() => handleOrderStatus('completed')}
-                      disabled={isProcessing || !proofFile} 
-                      className="flex-1 bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-bold py-4 rounded-xl active:scale-[0.98] transition-all text-base shadow-md flex items-center justify-center gap-2"
-                    >
-                      {isProcessing ? (
-                        <><RefreshCw className="animate-spin" size={18} /> Mengunggah Foto...</>
-                      ) : (
-                        <><CheckCircle2 size={18} /> Selesaikan Tugas</>
-                      )}
+                    <button onClick={() => handleOrderStatus('completed')} disabled={isProcessing || !proofFile || (activeOrder.category?.includes('Belanja') && shoppingInput === "")} className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold py-3.5 rounded-xl shadow-sm flex items-center justify-center gap-2 active:scale-95 transition-all text-sm">
+                      {isProcessing ? <><RefreshCw className="animate-spin" size={16} /> Mengunggah...</> : <><CheckCircle2 size={16} /> Selesaikan Pekerjaan</>}
                     </button>
                   )}
                 </div>

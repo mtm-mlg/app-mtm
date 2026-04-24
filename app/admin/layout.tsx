@@ -4,17 +4,23 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { 
   LayoutDashboard, PlusCircle, ClipboardList, 
-  Car, Settings, Bell, LogOut, Clock
+  Car, Settings, Bell, LogOut, Clock, CheckCircle2
 } from "lucide-react";
+
+// IMPORT FIREBASE UNTUK NOTIFIKASI REAL-TIME
+import { db } from "@/lib/firebase";
+import { collection, query, where, onSnapshot, doc, updateDoc } from "firebase/firestore";
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const [isDesktop, setIsDesktop] = useState(true);
   const pathname = usePathname();
   const router = useRouter();
 
-  // STATE UNTUK JAM REAL-TIME & NOTIFIKASI
+  // STATE UNTUK JAM REAL-TIME & NOTIFIKASI TARIK DANA
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
-  const [pendingOrdersCount, setPendingOrdersCount] = useState(0);
+  
+  const [withdrawRequests, setWithdrawRequests] = useState<any[]>([]);
+  const [isNotifOpen, setIsNotifOpen] = useState(false);
 
   useEffect(() => {
     // 1. Logika Responsive Layar
@@ -28,34 +34,40 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       setCurrentTime(new Date());
     }, 1000);
 
-    // 3. Logika Tarik Data Notifikasi Pesanan Baru (Tiap 10 Detik)
-    const fetchPendingCount = async () => {
-      try {
-        const res = await fetch("/api/orders");
-        const result = await res.json();
-        if (result.success) {
-          const pending = result.data.filter((o: any) => o.status === 'pending');
-          setPendingOrdersCount(pending.length);
-        }
-      } catch (error) {
-        console.error("Gagal menarik notifikasi", error);
-      }
-    };
-    fetchPendingCount();
-    const notifInterval = setInterval(fetchPendingCount, 10000);
+    // 3. LOGIKA REAL-TIME NOTIFIKASI TARIK DANA DRIVER
+    const q = query(collection(db, "withdrawals"), where("status", "==", "pending"));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const reqs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setWithdrawRequests(reqs);
+    });
 
     return () => {
       window.removeEventListener("resize", handleResize);
       clearInterval(timeInterval);
-      clearInterval(notifInterval);
+      unsubscribe(); // Bersihkan listener saat pindah halaman
     };
   }, []);
 
-  // FUNGSI LOGOUT (Menghapus Sesi & Kembali ke Login)
+  // FUNGSI LOGOUT
   const handleLogout = () => {
     if (confirm("Apakah Anda yakin ingin keluar dari Portal Owner?")) {
       localStorage.removeItem("mtm_user");
       router.push("/");
+    }
+  };
+
+  // FUNGSI MEMPROSES TARIK DANA
+  const handleProcessWithdrawal = async (id: string, driverName: string, amount: number) => {
+    if (confirm(`Apakah Anda SUDAH MENTRANSFER dana sebesar Rp ${amount.toLocaleString('id-ID')} ke rekening ${driverName}?\n\nKlik OK jika uang sudah berhasil dikirim.`)) {
+      try {
+        await updateDoc(doc(db, "withdrawals", id), { 
+          status: "completed",
+          processedAt: new Date().toISOString()
+        });
+        alert("Status tarik dana berhasil diperbarui!");
+      } catch (error) {
+        alert("Gagal memproses data. Periksa koneksi Anda.");
+      }
     }
   };
 
@@ -77,9 +89,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     }
   };
 
-  // HELPER FORMAT WAKTU & TANGGAL
   const formatTime = (date: Date) => {
-    // Memaksa format jam pakai titik dua (:) bukan titik (.)
     return new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(date).replace(/\./g, ':');
   };
   const formatDate = (date: Date) => {
@@ -143,8 +153,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           </>
         )}
 
-        {/* HEADER ATAS */}
-        <header className="h-20 md:h-24 flex items-center justify-between px-4 md:px-8 z-10 bg-white/80 md:bg-transparent backdrop-blur-md md:backdrop-blur-none border-b border-slate-200 md:border-none shrink-0 w-full">
+        {/* HEADER ATAS (DIPERBAIKI LAYER Z-INDEX NYA MENJADI Z-[999] MUTLAK) */}
+        <header className="relative h-20 md:h-24 flex items-center justify-between px-4 md:px-8 z-[999] bg-white/80 md:bg-transparent backdrop-blur-md md:backdrop-blur-none border-b border-slate-200 md:border-none shrink-0 w-full">
           
           <div className="flex items-center gap-2 md:gap-3">
             {!isDesktop && (
@@ -159,7 +169,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           
           <div className="flex items-center gap-2 md:gap-5">
             
-            {/* JAM REAL-TIME UNTUK SEMUA LAYAR */}
+            {/* JAM REAL-TIME */}
             {currentTime && (
               <div className="flex items-center gap-1.5 md:gap-3 bg-slate-100/80 backdrop-blur-md px-2.5 py-1.5 md:px-4 md:py-2 rounded-lg md:rounded-xl border border-slate-200 shadow-inner md:mr-2">
                 <Clock size={14} className="text-blue-600 hidden sm:block md:w-4 md:h-4" />
@@ -174,19 +184,67 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               </div>
             )}
 
-            {/* TOMBOL LONCENG AKTIF */}
-            <button 
-              onClick={() => router.push('/admin/orders')}
-              className="p-2 md:p-3 rounded-lg md:rounded-2xl bg-white shadow-sm hover:shadow-md border border-slate-200 text-slate-600 relative transition-all active:scale-95 shrink-0"
-              title="Lihat Notifikasi Pesanan"
-            >
-              <Bell size={16} className="md:w-5 md:h-5" />
-              {pendingOrdersCount > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 h-4 w-4 md:h-5 md:w-5 bg-rose-500 rounded-full border-2 border-white flex items-center justify-center text-[8px] md:text-[9px] font-black text-white shadow-sm animate-bounce">
-                  {pendingOrdersCount}
-                </span>
+            {/* ========================================== */}
+            {/* DROPDOWN NOTIFIKASI TARIK DANA */}
+            {/* ========================================== */}
+            <div className="relative">
+              <button 
+                onClick={() => setIsNotifOpen(!isNotifOpen)}
+                className="p-2 md:p-3 rounded-lg md:rounded-2xl bg-white shadow-sm hover:shadow-md border border-slate-200 text-slate-600 relative transition-all active:scale-95 shrink-0"
+                title="Notifikasi Penarikan Dana"
+              >
+                <Bell size={16} className="md:w-5 md:h-5" />
+                {withdrawRequests.length > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 h-4 w-4 md:h-5 md:w-5 bg-rose-500 rounded-full border-2 border-white flex items-center justify-center text-[8px] md:text-[9px] font-black text-white shadow-sm animate-pulse">
+                    {withdrawRequests.length}
+                  </span>
+                )}
+              </button>
+
+              {isNotifOpen && (
+                <div className="absolute right-0 top-full mt-3 w-[300px] md:w-[380px] bg-white rounded-2xl shadow-2xl border border-slate-100 z-[1000] overflow-hidden animate-in fade-in slide-in-from-top-4 duration-300 origin-top-right">
+                  <div className="bg-slate-800 p-4 flex items-center justify-between">
+                    <h3 className="text-white font-bold text-sm flex items-center gap-2">
+                      <Bell size={16} className="text-amber-400" /> Tarik Saldo Driver
+                    </h3>
+                    <span className="bg-rose-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
+                      {withdrawRequests.length} Permintaan
+                    </span>
+                  </div>
+                  
+                  <div className="max-h-[350px] overflow-y-auto hide-scrollbar bg-slate-50 relative z-[1000]">
+                    {withdrawRequests.length === 0 ? (
+                      <div className="p-8 text-center text-slate-400">
+                        <CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-400 opacity-50" />
+                        <p className="text-xs font-medium">Belum ada permintaan penarikan dana.</p>
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-slate-100">
+                        {withdrawRequests.map(req => (
+                          <div key={req.id} className="p-4 bg-white hover:bg-blue-50/50 transition-colors">
+                            <div className="flex justify-between items-start mb-2">
+                              <div>
+                                <h4 className="text-sm font-bold text-slate-800">{req.driverName || req.driverCode}</h4>
+                                <p className="text-[11px] font-semibold text-slate-500 mt-0.5">{req.bankName || "Bank"} - {req.accountNumber || "No. Rekening"}</p>
+                              </div>
+                              <span className="text-sm font-black text-rose-600 tracking-tight">
+                                Rp {req.amount?.toLocaleString('id-ID')}
+                              </span>
+                            </div>
+                            <button 
+                              onClick={() => handleProcessWithdrawal(req.id, req.driverName || req.driverCode, req.amount)}
+                              className="w-full mt-3 bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-bold py-2.5 rounded-lg transition-all shadow-sm flex items-center justify-center gap-1.5 active:scale-95"
+                            >
+                              <CheckCircle2 size={14} /> Tandai Sudah Ditransfer
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
               )}
-            </button>
+            </div>
             
             {/* AVATAR OWNER */}
             <div 
