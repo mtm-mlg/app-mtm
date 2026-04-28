@@ -6,7 +6,8 @@ import {
   MapPin, KeyRound, Camera, Edit3, 
   ToggleRight, ToggleLeft, Briefcase, Info,
   Hammer, Clock, Brain, RefreshCw, X, Save,
-  Landmark, CreditCard, CheckCircle2, ShoppingCart
+  Landmark, CreditCard, CheckCircle2, ShoppingCart,
+  Star, TrendingUp
 } from "lucide-react";
 import { db } from "@/lib/firebase";
 import { collection, query, where, getDocs, doc, updateDoc } from "firebase/firestore";
@@ -22,7 +23,7 @@ export default function DriverProfilePage() {
   });
   const [docId, setDocId] = useState<string>(""); 
 
-  // STATE PREFERENSI LAYANAN (DITAMBAH BELANJA)
+  // STATE PREFERENSI LAYANAN
   const [activeServices, setActiveServices] = useState({
     jarak: true, tenaga: false, waktu: true, pikiran: false, belanja: true 
   });
@@ -85,7 +86,6 @@ export default function DriverProfilePage() {
         }
         
         setNewUsername(finalData.code || "");
-        // Update Preferensi dari database (jika belanja belum ada, set true)
         if (finalData.preferences) {
            setActiveServices({
              ...finalData.preferences,
@@ -220,21 +220,26 @@ export default function DriverProfilePage() {
   return (
     <div className={`max-w-[800px] mx-auto pb-24 transition-all duration-700 px-2 md:px-0 ${isLoaded ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}>
       
-      <div className="mb-6 pt-2 flex justify-between items-center">
-        <h2 className="text-2xl md:text-3xl font-extrabold text-slate-800 tracking-tight flex items-center gap-2">
-          <User className="text-blue-600" size={28} /> ID Digital Mitra
-        </h2>
-        {(isLoading || isUploading) && <RefreshCw size={20} className="animate-spin text-blue-500" />}
+      <div className="mb-6 pt-2 flex justify-between items-center border-b border-slate-200 pb-5">
+        <div>
+          <h2 className="text-2xl md:text-3xl font-extrabold text-slate-800 tracking-tight flex items-center gap-2">
+            <User className="text-blue-600" size={28} /> ID Digital Mitra
+          </h2>
+          <p className="text-xs md:text-sm text-slate-500 font-medium mt-1">Kelola data diri dan preferensi kerja Anda.</p>
+        </div>
+        {(isLoading || isUploading) && <RefreshCw size={24} className="animate-spin text-blue-500" />}
       </div>
 
-      {/* ID CARD */}
-      <div className="bg-white rounded-3xl shadow-md border border-slate-200 overflow-hidden mb-6 relative">
+      {/* ID CARD PREMIUM */}
+      <div className="bg-white rounded-3xl shadow-lg border border-slate-200 overflow-hidden mb-6 relative">
         <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/10 rounded-full blur-3xl pointer-events-none"></div>
-        <div className="h-32 bg-gradient-to-r from-slate-800 to-slate-900 relative">
+        <div className="h-32 bg-gradient-to-r from-slate-800 via-slate-900 to-black relative">
            <div className="absolute inset-0 bg-blue-500/20 mix-blend-overlay"></div>
         </div>
         <div className="px-6 md:px-8 pb-6 md:pb-8 relative">
           <div className="flex justify-between items-end -mt-16 mb-4">
+            
+            {/* FOTO PROFIL UPLOADABLE (POIN 1) */}
             <div className="relative group cursor-pointer">
               <label className="block w-28 h-28 md:w-32 md:h-32 rounded-full bg-white p-1.5 shadow-xl cursor-pointer">
                 <div className="w-full h-full rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-slate-400 text-3xl overflow-hidden relative uppercase">
@@ -244,22 +249,23 @@ export default function DriverProfilePage() {
                     driverProfile.name ? driverProfile.name.substring(0,2) : "DR"
                   )}
                   {isUploading && (
-                    <div className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center backdrop-blur-sm">
+                    <div className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center backdrop-blur-sm transition-all">
                       <RefreshCw size={24} className="text-white animate-spin mb-1" />
                     </div>
                   )}
-                  <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Camera size={24} className="text-white" />
+                  <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-[2px]">
+                    <Camera size={28} className="text-white" />
                   </div>
                 </div>
                 <input type="file" accept="image/*" onChange={handlePhotoUpload} disabled={isUploading} className="hidden" />
               </label>
-              <div className="absolute bottom-2 right-2 bg-blue-600 w-8 h-8 rounded-full border-[3px] border-white flex items-center justify-center shadow-sm pointer-events-none">
-                <Camera size={14} className="text-white" />
+              <div className="absolute bottom-2 right-2 bg-blue-600 w-8 h-8 md:w-10 md:h-10 rounded-full border-[3px] md:border-4 border-white flex items-center justify-center shadow-md pointer-events-none">
+                <Camera size={16} className="text-white" />
               </div>
             </div>
+            
             <div className="mb-2">
-              <span className="flex items-center gap-1 text-[10px] md:text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full shadow-sm">
+              <span className="flex items-center gap-1 text-[10px] md:text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-full shadow-sm">
                 <CheckCircle2 size={14} className="text-emerald-500" /> Terverifikasi
               </span>
             </div>
@@ -269,29 +275,126 @@ export default function DriverProfilePage() {
               {driverProfile.name || "Memuat..."}
             </h1>
             <p className="text-xs font-semibold text-slate-500 flex items-center gap-1.5">
-              ID Mitra: <span className="uppercase text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded">{driverProfile.code || "---"}</span>
+              ID Mitra: <span className="uppercase text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded border border-blue-100">{driverProfile.code || "---"}</span>
             </p>
           </div>
           <div className="mt-6 pt-6 border-t border-slate-100 flex items-center justify-between gap-4">
             <div>
-              <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest mb-0.5">Kinerja Akun</p>
-              <p className="text-sm md:text-base font-bold text-slate-700 flex items-center gap-1.5">
-                <ShieldCheck size={18} className="text-blue-500" /> {driverProfile.completedOrders} Pesanan Selesai
+              <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest mb-0.5">Tugas Selesai</p>
+              <p className="text-sm md:text-base font-black text-slate-700 flex items-center gap-1.5">
+                <ShieldCheck size={18} className="text-blue-500" /> {driverProfile.completedOrders} Order
               </p>
             </div>
-            <button onClick={() => setIsProfileModalOpen(true)} className="px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200 text-xs font-bold rounded-xl transition-all active:scale-95 flex items-center gap-1.5 shadow-sm">
+            <button onClick={() => setIsProfileModalOpen(true)} className="px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-xl transition-all active:scale-95 flex items-center gap-1.5 shadow-md">
                <Edit3 size={14} /> Edit Profil
             </button>
           </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+      {/* KARTU STATISTIK PERFORMA (POIN 4) */}
+      <div className="grid grid-cols-2 gap-4 mb-6">
+        <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-col items-center justify-center text-center relative overflow-hidden group">
+          <Star size={40} className="absolute -bottom-3 -right-3 text-amber-50 opacity-50 group-hover:scale-110 transition-transform duration-500" />
+          <div className="flex items-center gap-1.5 text-amber-500 mb-1 z-10">
+            <Star size={24} className="fill-amber-500" />
+            <span className="text-2xl md:text-3xl font-black text-slate-800">5.0</span>
+          </div>
+          <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest z-10">Rating Pelanggan</p>
+        </div>
+        
+        <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-col items-center justify-center text-center relative overflow-hidden group">
+          <TrendingUp size={40} className="absolute -bottom-3 -right-3 text-emerald-50 opacity-50 group-hover:scale-110 transition-transform duration-500" />
+          <div className="flex items-center gap-1.5 text-emerald-500 mb-1 z-10">
+            <TrendingUp size={24} />
+            <span className="text-2xl md:text-3xl font-black text-slate-800">98%</span>
+          </div>
+          <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest z-10">Performa Pesanan</p>
+        </div>
+      </div>
+
+      {/* ========================================== */}
+      {/* 5 KATEGORI JASA (SWITCH/TOGGLE) - POIN 2 */}
+      {/* ========================================== */}
+      <div className="bg-white rounded-3xl p-5 md:p-6 shadow-sm border border-slate-200 mb-6">
+        <h3 className="text-sm md:text-base font-bold text-slate-800 uppercase tracking-widest mb-1 flex items-center gap-2">
+          <Briefcase size={18} className="text-blue-600"/> Preferensi Layanan
+        </h3>
+        <p className="text-[11px] md:text-xs font-medium text-slate-500 mb-5 leading-relaxed">
+          Pesanan dari kategori yang <strong className="text-rose-500">dimatikan</strong> tidak akan masuk ke Radar Anda. (Pilihan otomatis tersimpan).
+        </p>
+        
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div onClick={() => handleToggleService('jarak')} className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all cursor-pointer active:scale-[0.98] ${activeServices.jarak ? 'border-blue-200 bg-blue-50/50 shadow-sm' : 'border-slate-100 hover:bg-slate-50 grayscale opacity-60'}`}>
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-white shadow-sm border border-slate-100 text-blue-600 rounded-xl"><MapPin size={20} /></div>
+              <div>
+                <h4 className="text-sm font-bold text-slate-800">Jasa Jarak</h4>
+                <p className="text-[10px] font-semibold text-slate-500 mt-0.5">Antar jemput (KM)</p>
+              </div>
+            </div>
+            {activeServices.jarak ? <ToggleRight size={40} className="text-blue-600" /> : <ToggleLeft size={40} className="text-slate-300" />}
+          </div>
+
+          <div onClick={() => handleToggleService('tenaga')} className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all cursor-pointer active:scale-[0.98] ${activeServices.tenaga ? 'border-orange-200 bg-orange-50/50 shadow-sm' : 'border-slate-100 hover:bg-slate-50 grayscale opacity-60'}`}>
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-white shadow-sm border border-slate-100 text-orange-600 rounded-xl"><Hammer size={20} /></div>
+              <div>
+                <h4 className="text-sm font-bold text-slate-800">Jasa Tenaga</h4>
+                <p className="text-[10px] font-semibold text-slate-500 mt-0.5">Angkut & bongkar muat</p>
+              </div>
+            </div>
+            {activeServices.tenaga ? <ToggleRight size={40} className="text-orange-500" /> : <ToggleLeft size={40} className="text-slate-300" />}
+          </div>
+
+          <div onClick={() => handleToggleService('belanja')} className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all cursor-pointer active:scale-[0.98] ${activeServices.belanja ? 'border-rose-200 bg-rose-50/50 shadow-sm' : 'border-slate-100 hover:bg-slate-50 grayscale opacity-60'}`}>
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-white shadow-sm border border-slate-100 text-rose-600 rounded-xl"><ShoppingCart size={20} /></div>
+              <div>
+                <h4 className="text-sm font-bold text-slate-800">Jasa Belanja</h4>
+                <p className="text-[10px] font-semibold text-slate-500 mt-0.5">Titip beli & Talangan</p>
+              </div>
+            </div>
+            {activeServices.belanja ? <ToggleRight size={40} className="text-rose-600" /> : <ToggleLeft size={40} className="text-slate-300" />}
+          </div>
+
+          <div onClick={() => handleToggleService('waktu')} className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all cursor-pointer active:scale-[0.98] ${activeServices.waktu ? 'border-emerald-200 bg-emerald-50/50 shadow-sm' : 'border-slate-100 hover:bg-slate-50 grayscale opacity-60'}`}>
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-white shadow-sm border border-slate-100 text-emerald-600 rounded-xl"><Clock size={20} /></div>
+              <div>
+                <h4 className="text-sm font-bold text-slate-800">Jasa Waktu</h4>
+                <p className="text-[10px] font-semibold text-slate-500 mt-0.5">Sewa driver per jam</p>
+              </div>
+            </div>
+            {activeServices.waktu ? <ToggleRight size={40} className="text-emerald-500" /> : <ToggleLeft size={40} className="text-slate-300" />}
+          </div>
+
+          <div onClick={() => handleToggleService('pikiran')} className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all cursor-pointer active:scale-[0.98] ${activeServices.pikiran ? 'border-purple-200 bg-purple-50/50 shadow-sm' : 'border-slate-100 hover:bg-slate-50 grayscale opacity-60'}`}>
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-white shadow-sm border border-slate-100 text-purple-600 rounded-xl"><Brain size={20} /></div>
+              <div>
+                <h4 className="text-sm font-bold text-slate-800">Jasa Pikiran</h4>
+                <p className="text-[10px] font-semibold text-slate-500 mt-0.5">Keahlian & tugas khusus</p>
+              </div>
+            </div>
+            {activeServices.pikiran ? <ToggleRight size={40} className="text-purple-600" /> : <ToggleLeft size={40} className="text-slate-300" />}
+          </div>
+
+        </div>
+      </div>
+
+      {/* DATA KENDARAAN & REKENING (EDITABLE) - POIN 3 */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
         <div className="bg-white rounded-3xl p-5 md:p-6 shadow-sm border border-slate-200 relative overflow-hidden">
           <div className="absolute top-0 right-0 w-16 h-16 bg-blue-50 rounded-bl-[3rem] -z-10"></div>
-          <h3 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-5 flex items-center gap-2">
-            <Briefcase size={16} className="text-blue-500"/> Data Operasional
-          </h3>
+          <div className="flex justify-between items-start mb-5">
+            <h3 className="text-sm font-bold text-slate-800 uppercase tracking-widest flex items-center gap-2">
+              <Car size={16} className="text-blue-500"/> Operasional
+            </h3>
+            <button onClick={() => setIsProfileModalOpen(true)} className="text-[10px] font-bold text-blue-600 hover:text-white hover:bg-blue-500 px-3 py-1.5 bg-blue-50 border border-blue-100 rounded-lg transition-colors shadow-sm">
+               Edit Data
+            </button>
+          </div>
           <div className="space-y-4">
             <div className="flex items-start gap-3">
               <div className="p-2 bg-slate-50 rounded-xl border border-slate-100 text-slate-500 mt-0.5"><MapPin size={16} /></div>
@@ -321,9 +424,9 @@ export default function DriverProfilePage() {
           <div className="absolute top-0 right-0 w-16 h-16 bg-emerald-50 rounded-bl-[3rem] -z-10"></div>
           <div className="flex justify-between items-start mb-5">
             <h3 className="text-sm font-bold text-slate-800 uppercase tracking-widest flex items-center gap-2">
-              <Landmark size={16} className="text-emerald-500"/> Pencairan Dana
+              <Landmark size={16} className="text-emerald-500"/> Info Rekening
             </h3>
-            <button onClick={() => setIsBankModalOpen(true)} className="text-[10px] font-bold text-emerald-600 hover:text-white hover:bg-emerald-500 px-2.5 py-1 bg-emerald-50 border border-emerald-100 rounded-lg transition-colors shadow-sm">
+            <button onClick={() => setIsBankModalOpen(true)} className="text-[10px] font-bold text-emerald-600 hover:text-white hover:bg-emerald-500 px-3 py-1.5 bg-emerald-50 border border-emerald-100 rounded-lg transition-colors shadow-sm">
                Ubah
             </button>
           </div>
@@ -353,88 +456,19 @@ export default function DriverProfilePage() {
         </div>
       </div>
 
-      {/* ========================================== */}
-      {/* 5 KATEGORI JASA (TERMASUK BELANJA) */}
-      {/* ========================================== */}
-      <div className="bg-white rounded-3xl p-5 md:p-6 shadow-sm border border-slate-200 mb-6">
-        <h3 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-1">
-          Preferensi Layanan
-        </h3>
-        <p className="text-[11px] font-medium text-slate-500 mb-5 leading-relaxed">
-          Pesanan dari kategori yang <strong className="text-rose-500">dimatikan</strong> tidak akan masuk ke Radar Anda. Pilihan tersimpan otomatis.
-        </p>
-        
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div onClick={() => handleToggleService('jarak')} className={`flex items-center justify-between p-4 rounded-2xl border transition-all cursor-pointer active:scale-[0.98] ${activeServices.jarak ? 'border-blue-200 bg-blue-50/50 shadow-sm' : 'border-slate-100 hover:bg-slate-50 grayscale opacity-60'}`}>
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-white shadow-sm border border-slate-100 text-blue-600 rounded-xl"><MapPin size={18} /></div>
-              <div>
-                <h4 className="text-sm font-bold text-slate-800">Jasa Jarak</h4>
-                <p className="text-[10px] font-semibold text-slate-500 mt-0.5">Antar jemput (KM)</p>
-              </div>
-            </div>
-            {activeServices.jarak ? <ToggleRight size={36} className="text-blue-600" /> : <ToggleLeft size={36} className="text-slate-300" />}
-          </div>
-
-          <div onClick={() => handleToggleService('tenaga')} className={`flex items-center justify-between p-4 rounded-2xl border transition-all cursor-pointer active:scale-[0.98] ${activeServices.tenaga ? 'border-orange-200 bg-orange-50/50 shadow-sm' : 'border-slate-100 hover:bg-slate-50 grayscale opacity-60'}`}>
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-white shadow-sm border border-slate-100 text-orange-600 rounded-xl"><Hammer size={18} /></div>
-              <div>
-                <h4 className="text-sm font-bold text-slate-800">Jasa Tenaga</h4>
-                <p className="text-[10px] font-semibold text-slate-500 mt-0.5">Angkut & bongkar muat</p>
-              </div>
-            </div>
-            {activeServices.tenaga ? <ToggleRight size={36} className="text-orange-500" /> : <ToggleLeft size={36} className="text-slate-300" />}
-          </div>
-
-          <div onClick={() => handleToggleService('waktu')} className={`flex items-center justify-between p-4 rounded-2xl border transition-all cursor-pointer active:scale-[0.98] ${activeServices.waktu ? 'border-emerald-200 bg-emerald-50/50 shadow-sm' : 'border-slate-100 hover:bg-slate-50 grayscale opacity-60'}`}>
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-white shadow-sm border border-slate-100 text-emerald-600 rounded-xl"><Clock size={18} /></div>
-              <div>
-                <h4 className="text-sm font-bold text-slate-800">Jasa Waktu</h4>
-                <p className="text-[10px] font-semibold text-slate-500 mt-0.5">Sewa driver per jam</p>
-              </div>
-            </div>
-            {activeServices.waktu ? <ToggleRight size={36} className="text-emerald-500" /> : <ToggleLeft size={36} className="text-slate-300" />}
-          </div>
-
-          <div onClick={() => handleToggleService('pikiran')} className={`flex items-center justify-between p-4 rounded-2xl border transition-all cursor-pointer active:scale-[0.98] ${activeServices.pikiran ? 'border-purple-200 bg-purple-50/50 shadow-sm' : 'border-slate-100 hover:bg-slate-50 grayscale opacity-60'}`}>
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-white shadow-sm border border-slate-100 text-purple-600 rounded-xl"><Brain size={18} /></div>
-              <div>
-                <h4 className="text-sm font-bold text-slate-800">Jasa Pikiran</h4>
-                <p className="text-[10px] font-semibold text-slate-500 mt-0.5">Keahlian & tugas khusus</p>
-              </div>
-            </div>
-            {activeServices.pikiran ? <ToggleRight size={36} className="text-purple-600" /> : <ToggleLeft size={36} className="text-slate-300" />}
-          </div>
-
-          <div onClick={() => handleToggleService('belanja')} className={`flex items-center justify-between p-4 rounded-2xl border transition-all cursor-pointer active:scale-[0.98] ${activeServices.belanja ? 'border-rose-200 bg-rose-50/50 shadow-sm' : 'border-slate-100 hover:bg-slate-50 grayscale opacity-60'}`}>
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-white shadow-sm border border-slate-100 text-rose-600 rounded-xl"><ShoppingCart size={18} /></div>
-              <div>
-                <h4 className="text-sm font-bold text-slate-800">Jasa Belanja</h4>
-                <p className="text-[10px] font-semibold text-slate-500 mt-0.5">Titip beli & Talangan</p>
-              </div>
-            </div>
-            {activeServices.belanja ? <ToggleRight size={36} className="text-rose-600" /> : <ToggleLeft size={36} className="text-slate-300" />}
-          </div>
-        </div>
-      </div>
-
       {/* KEAMANAN & LOGOUT */}
       <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden mb-8">
         <div className="divide-y divide-slate-100">
           <button onClick={() => setIsSecurityModalOpen(true)} className="w-full flex items-center justify-between p-4 md:p-5 hover:bg-slate-50 transition-colors active:bg-slate-100 group">
             <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-amber-50 text-amber-600 rounded-xl group-hover:bg-amber-100 transition-colors"><KeyRound size={18} /></div>
+              <div className="p-2.5 bg-amber-50 text-amber-600 rounded-xl group-hover:bg-amber-100 transition-colors"><KeyRound size={20} /></div>
               <span className="text-sm font-bold text-slate-700">Ubah Username & Login</span>
             </div>
-            <ChevronRight size={18} className="text-slate-300" />
+            <ChevronRight size={20} className="text-slate-300" />
           </button>
           <button onClick={handleLogout} className="w-full flex items-center justify-between p-4 md:p-5 hover:bg-rose-50 transition-colors active:bg-rose-100 group">
             <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-rose-50 text-rose-600 rounded-xl group-hover:bg-rose-100 transition-colors"><LogOut size={18} /></div>
+              <div className="p-2.5 bg-rose-50 text-rose-600 rounded-xl group-hover:bg-rose-100 transition-colors"><LogOut size={20} /></div>
               <span className="text-sm font-bold text-rose-600">Keluar dari Akun (Logout)</span>
             </div>
           </button>
@@ -447,8 +481,8 @@ export default function DriverProfilePage() {
           <div className="bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl max-w-md w-full relative overflow-hidden flex flex-col animate-in slide-in-from-bottom-10 sm:slide-in-from-bottom-0 sm:zoom-in-95">
             <div className="p-5 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
               <div>
-                <h3 className="font-extrabold text-lg text-slate-800">Edit Profil</h3>
-                <p className="text-xs text-slate-500 font-medium mt-0.5">Perbarui data operasional Anda.</p>
+                <h3 className="font-extrabold text-lg text-slate-800">Edit Profil Operasional</h3>
+                <p className="text-xs text-slate-500 font-medium mt-0.5">Perbarui data kendaraan dan kontak.</p>
               </div>
               <button onClick={() => setIsProfileModalOpen(false)} className="p-2 bg-white text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-full transition-colors border border-slate-200"><X size={18} /></button>
             </div>
