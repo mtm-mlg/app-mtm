@@ -55,7 +55,6 @@ export default function DriverHistoryPage() {
 
   useEffect(() => { fetchHistory(); }, [driverCode]);
 
-  // HELPER TANGGAL AMAN (ANTI CRASH - MENGGUNAKAN TEKS BIASA)
   const formatDateTime = (dateString: any) => {
     if (!dateString) return "Data Lama";
     const date = new Date(dateString);
@@ -66,16 +65,38 @@ export default function DriverHistoryPage() {
     }).format(date);
   };
 
+  // ========================================================
+  // HELPER MATEMATIKA (SINKRON DENGAN ADMIN)
+  // ========================================================
+  const getSubtotalJasa = (order: any) => {
+    const qty = Number(order.quantity) || 1;
+    if (order.basePrice) {
+      return Number(order.basePrice) * qty; 
+    }
+    const total = Number(order.totalPrice) || 0;
+    const shopping = Number(order.shoppingCost) || 0;
+    const urgent = Number(order.urgentFee) || 0;
+    const calc = total - shopping - urgent;
+    return calc > 0 ? calc : total;
+  };
+
+  const getUnitPrice = (order: any) => {
+    if (order.basePrice) return Number(order.basePrice);
+    const sub = getSubtotalJasa(order);
+    const qty = Number(order.quantity) || 1;
+    return sub / qty;
+  };
+
   const calculateDriverIncome = (order: any) => {
-    const baseJasa = Number(order.basePrice) || Number(order.totalPrice) || 0;
+    const baseJasa = getSubtotalJasa(order); // Dihitung berdasarkan Harga x QTY
     const tier = order.commissionTier || 'sedang';
     let driverPct = 0.80; 
     if (tier === 'ringan') driverPct = 0.70; 
+    if (tier === 'sedang') driverPct = 0.80; 
     if (tier === 'berat') driverPct = 0.90;  
     return (baseJasa * driverPct) + (Number(order.shoppingCost) || 0) + (Number(order.urgentFee) || 0);
   };
 
-  // LOGIKA FILTER TANGGAL ANTI-CRASH
   const filteredHistory = orders.filter(order => {
     const isHistoryStatus = order.status === "completed" || order.status === "cancelled";
     const matchSearch = order.invoice?.toLowerCase().includes(searchTerm.toLowerCase()) || 
@@ -106,75 +127,148 @@ export default function DriverHistoryPage() {
     }
   };
 
+  // ========================================================
+  // FUNGSI CETAK PDF YANG SINKRON DENGAN PENGATURAN (MULTI-BANK, TANDA TANGAN)
+  // ========================================================
   const handleGenerateInvoice = async (order: any) => {
-    if (!settings) return;
+    if (!settings) return alert("Menunggu pengaturan, silakan coba lagi...");
     setIsGeneratingPDF(order.id);
+    
     try {
       const config = settings.invoiceConfig || {};
       const payInfo = settings.paymentInfo || {};
-      const baseJasa = Number(order.basePrice) || Number(order.totalPrice) || 0;
+      
+      const unitPrice = getUnitPrice(order);
+      const subtotalJasa = getSubtotalJasa(order);
       const numTalangan = Number(order.shoppingCost) || 0;
       const urgentFee = Number(order.urgentFee) || 0;
-      const currentTotal = baseJasa + numTalangan + urgentFee;
+      const currentTotal = subtotalJasa + numTalangan + urgentFee;
 
-      // Gunakan tanggal saat ini jika data lama tidak punya createdAt
+      const driverName = driverProfile?.name || driverCode;
+      const driverPhone = driverProfile?.phone || "-";
+      const driverVehicle = driverProfile?.vehicle || "-";
+
       const displayDate = order.createdAt && !isNaN(new Date(order.createdAt).getTime()) 
         ? new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(order.createdAt))
         : new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date());
 
       const invoiceElement = document.createElement("div");
-      invoiceElement.style.cssText = "position:absolute;left:-9999px;top:-9999px;width:800px;background:white;color:#1e293b;font-family:Arial;padding:40px;";
+      invoiceElement.style.cssText = "position:absolute;left:-9999px;top:-9999px;width:800px;background:white;color:#1e293b;font-family:Arial, sans-serif;padding:40px;";
+      
       invoiceElement.innerHTML = `
-        <div style="text-align:center;margin-bottom:30px;border-bottom:2px solid #e2e8f0;padding-bottom:20px;">
-          ${settings.companyInfo?.logoUrl ? `<img src="${settings.companyInfo.logoUrl}" style="height:60px;margin-bottom:10px;object-fit:contain;" crossorigin="anonymous"/>` : ''}
-          <h1 style="font-size:32px;font-weight:900;margin:0;">${settings.companyInfo?.name || 'MTM APP'}</h1>
-          <p style="font-size:14px;color:#64748b;letter-spacing:4px;margin-top:5px;">INVOICE TAGIHAN LAYANAN</p>
-        </div>
-        <div style="display:flex;justify-content:space-between;margin-bottom:30px;">
+        ${config.showLogo ? `
+          <div style="text-align: center; margin-bottom: 30px; border-bottom: 2px solid #e2e8f0; padding-bottom: 20px;">
+            ${settings.companyInfo?.logoUrl ? `<img src="${settings.companyInfo.logoUrl}" style="height: 60px; margin-bottom: 10px; object-fit: contain;" crossorigin="anonymous"/>` : ''}
+            <h1 style="font-size: 32px; font-weight: 900; margin: 0;">${settings.companyInfo?.name || 'MTM APP'}</h1>
+            <p style="font-size: 14px; color: #64748b; letter-spacing: 4px; margin-top: 5px;">INVOICE TAGIHAN LAYANAN</p>
+          </div>
+        ` : ''}
+
+        <div style="display: flex; justify-content: space-between; margin-bottom: 30px;">
           <div>
-            <p style="font-size:14px;color:#64748b;margin:0 0 5px 0;">Ditagihkan Kepada:</p>
-            <h2 style="font-size:20px;font-weight:bold;margin:0;">${order.customerName}</h2>
-            <p style="font-size:14px;margin:5px 0 0 0;">${order.customerPhone}</p>
-            <p style="font-size:14px;margin:5px 0 0 0;max-width:300px;">Alamat: ${order.customerAddress || "-"}</p>
+            <p style="font-size: 14px; color: #64748b; margin: 0 0 5px 0;">Ditagihkan Kepada:</p>
+            <h2 style="font-size: 20px; font-weight: bold; margin: 0;">${order.customerName}</h2>
+            <p style="font-size: 14px; margin: 5px 0 0 0;">${order.customerPhone}</p>
+            <p style="font-size: 14px; margin: 5px 0 0 0; max-width: 300px;">Alamat: ${order.customerAddress || "-"}</p>
           </div>
-          <div style="text-align:right;">
-            <p style="font-size:14px;color:#64748b;margin:0 0 5px 0;">Nomor Invoice:</p>
-            <h2 style="font-size:20px;font-weight:bold;color:#2563eb;margin:0;">${order.invoice}</h2>
-            <p style="font-size:14px;margin:5px 0 0 0;">Tanggal: ${displayDate}</p>
-          </div>
-        </div>
-        <div style="background-color:#f8fafc;padding:20px;border-radius:8px;border:1px solid #e2e8f0;margin-bottom:30px;">
-          <h3 style="font-size:16px;margin:0 0 10px 0;border-bottom:1px solid #cbd5e1;padding-bottom:5px;">INFO DRIVER PENGANTAR</h3>
-          <div style="display:flex;justify-content:space-between;font-size:14px;">
-            <div>Nama: <strong>${driverProfile?.name || driverCode}</strong></div>
-            <div>Kontak: <strong>${driverProfile?.phone || "-"}</strong></div>
-            <div>Plat: <strong>${driverProfile?.vehicle || "-"}</strong></div>
+          <div style="text-align: right;">
+            <p style="font-size: 14px; color: #64748b; margin: 0 0 5px 0;">Nomor Invoice:</p>
+            <h2 style="font-size: 20px; font-weight: bold; color: #2563eb; margin: 0;">${order.invoice}</h2>
+            <p style="font-size: 14px; margin: 5px 0 0 0;">Tanggal: ${displayDate}</p>
           </div>
         </div>
-        <table style="width:100%;border-collapse:collapse;margin-bottom:30px;">
-          <tr style="background-color:#f1f5f9;border-bottom:2px solid #cbd5e1;">
-            <th style="padding:10px;text-align:left;">DESKRIPSI JASA</th>
-            <th style="padding:10px;text-align:right;">QTY</th>
-            <th style="padding:10px;text-align:right;">TARIF</th>
-            <th style="padding:10px;text-align:right;">SUBTOTAL</th>
-          </tr>
-          <tr style="border-bottom:1px solid #e2e8f0;">
-            <td style="padding:15px 10px;font-weight:bold;">${order.serviceName}<div style="font-size:12px;font-weight:normal;color:#64748b;">Ongkos Kirim / Jasa</div></td>
-            <td style="padding:15px 10px;text-align:right;">${order.quantity || 1} ${order.unit || 'Pcs'}</td>
-            <td style="padding:15px 10px;text-align:right;">Rp ${baseJasa.toLocaleString('id-ID')}</td>
-            <td style="padding:15px 10px;text-align:right;font-weight:bold;">Rp ${baseJasa.toLocaleString('id-ID')}</td>
-          </tr>
-          ${numTalangan > 0 ? `<tr><td style="padding:15px 10px;font-weight:bold;color:#e11d48;">Talangan Barang</td><td style="padding:15px 10px;text-align:right;">1 Lumpsum</td><td style="padding:15px 10px;text-align:right;">Rp ${numTalangan.toLocaleString('id-ID')}</td><td style="padding:15px 10px;text-align:right;font-weight:bold;color:#e11d48;">Rp ${numTalangan.toLocaleString('id-ID')}</td></tr>` : ''}
-          ${urgentFee > 0 ? `<tr><td style="padding:15px 10px;font-weight:bold;color:#d97706;">Biaya Urgent</td><td style="padding:15px 10px;text-align:right;">1 Lumpsum</td><td style="padding:15px 10px;text-align:right;">Rp ${urgentFee.toLocaleString('id-ID')}</td><td style="padding:15px 10px;text-align:right;font-weight:bold;color:#d97706;">Rp ${urgentFee.toLocaleString('id-ID')}</td></tr>` : ''}
+
+        <div style="background-color: #f8fafc; padding: 20px; border-radius: 8px; border: 1px solid #e2e8f0; margin-bottom: 30px;">
+          <h3 style="font-size: 16px; margin: 0 0 10px 0; border-bottom: 1px solid #cbd5e1; padding-bottom: 5px;">INFO DRIVER / ARMADA PENGANTAR</h3>
+          <div style="display: flex; justify-content: space-between; font-size: 14px;">
+            <div>Nama: <strong>${driverName}</strong></div><div>Kontak: <strong>${driverPhone}</strong></div><div>Plat: <strong>${driverVehicle}</strong></div>
+          </div>
+        </div>
+
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px;">
+          <thead>
+            <tr style="background-color: #f1f5f9; border-bottom: 2px solid #cbd5e1;">
+              <th style="padding: 10px; text-align: left; font-size: 14px;">DESKRIPSI JASA</th>
+              <th style="padding: 10px; text-align: right; font-size: 14px;">QTY/SATUAN</th>
+              <th style="padding: 10px; text-align: right; font-size: 14px;">TARIF</th>
+              <th style="padding: 10px; text-align: right; font-size: 14px;">SUBTOTAL</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom: 1px solid #e2e8f0;">
+              <td style="padding: 15px 10px; font-size: 15px; font-weight: bold;">
+                ${order.serviceName} 
+                ${order.serviceDetails ? `<div style="font-size: 12px; font-weight: normal; color: #475569; margin-top: 8px; white-space: pre-wrap; line-height: 1.5; padding: 10px; background-color: #fcfcfc; border-left: 3px solid #f59e0b; border-radius: 4px;"><strong>Catatan/Detail Pekerjaan:</strong><br/>${order.serviceDetails}</div>` : ''}
+                <div style="font-size: 12px; font-weight: normal; color: #64748b; margin-top: 6px;">Ongkos Kirim / Tarif Jasa</div>
+              </td>
+              <td style="padding: 15px 10px; text-align: right; vertical-align: top;">${order.quantity || 1} ${order.unit || 'Pcs'}</td>
+              <td style="padding: 15px 10px; text-align: right; vertical-align: top;">Rp ${(unitPrice).toLocaleString('id-ID')}</td>
+              <td style="padding: 15px 10px; text-align: right; font-weight: bold; vertical-align: top;">Rp ${(subtotalJasa).toLocaleString('id-ID')}</td>
+            </tr>
+            ${numTalangan > 0 ? `
+            <tr style="border-bottom: 1px solid #e2e8f0;">
+              <td style="padding: 15px 10px; font-size: 15px; font-weight: bold; color: #e11d48;">Harga Barang Belanjaan (Talangan)</td>
+              <td style="padding: 15px 10px; text-align: right;">1 Lumpsum</td>
+              <td style="padding: 15px 10px; text-align: right;">Rp ${numTalangan.toLocaleString('id-ID')}</td>
+              <td style="padding: 15px 10px; text-align: right; font-weight: bold; color: #e11d48;">Rp ${numTalangan.toLocaleString('id-ID')}</td>
+            </tr>` : ''}
+            ${urgentFee > 0 ? `
+            <tr style="border-bottom: 1px solid #e2e8f0;">
+              <td style="padding: 15px 10px; font-weight: bold; color: #d97706;">Biaya Urgent / Prioritas</td>
+              <td style="padding: 15px 10px; text-align: right;">1 Lumpsum</td>
+              <td style="padding: 15px 10px; text-align: right;">Rp ${urgentFee.toLocaleString('id-ID')}</td>
+              <td style="padding: 15px 10px; text-align: right; font-weight: bold; color: #d97706;">Rp ${urgentFee.toLocaleString('id-ID')}</td>
+            </tr>` : ''}
+          </tbody>
         </table>
-        <div style="display:flex;justify-content:flex-end;margin-bottom:40px;">
-          <div style="background-color:#f8fafc;padding:15px 30px;border-radius:8px;border:1px solid #cbd5e1;min-width:300px;">
-            <div style="display:flex;justify-content:space-between;font-size:16px;align-items:center;">
-              <span>Total Tagihan</span><strong style="font-size:24px;">Rp ${currentTotal.toLocaleString('id-ID')}</strong>
+
+        <div style="display: flex; justify-content: flex-end; margin-bottom: 40px;">
+          <div style="background-color: #f8fafc; padding: 15px 30px; border-radius: 8px; border: 1px solid #cbd5e1; min-width: 300px;">
+            <div style="display: flex; justify-content: space-between; font-size: 16px; align-items: center;">
+              <span>Total Tagihan</span><strong style="font-size: 24px;">Rp ${currentTotal.toLocaleString('id-ID')}</strong>
             </div>
           </div>
         </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 20px;">
+          <div style="flex: 1; display: flex; gap: 20px;">
+            ${config.showBank ? `
+              <div style="flex: 1;">
+                <h4 style="font-size: 14px; font-weight: bold; border-bottom: 1px solid #cbd5e1; padding-bottom: 5px; margin-bottom: 10px;">TRANSFER BANK</h4>
+                ${payInfo.banks && Array.isArray(payInfo.banks) ? payInfo.banks.map((bank:any) => `
+                  <div style="margin-bottom: 10px;">
+                    <p style="font-size: 14px; font-weight: bold; color: #2563eb; margin: 0;">${bank.bankName || 'BANK'} - ${bank.accountNumber || '-'}</p>
+                    <p style="font-size: 12px; color: #475569; margin: 2px 0 0 0;">A/N: ${bank.accountName || '-'}</p>
+                  </div>
+                `).join('') : `
+                  <div style="margin-bottom: 10px;">
+                    <p style="font-size: 14px; font-weight: bold; color: #2563eb; margin: 0;">${payInfo.bankName || 'BANK'} - ${payInfo.accountNumber || '-'}</p>
+                    <p style="font-size: 12px; color: #475569; margin: 2px 0 0 0;">A/N: ${payInfo.accountName || '-'}</p>
+                  </div>
+                `}
+              </div>
+            ` : ''}
+            
+            ${config.showQris ? `
+              <div style="text-align: center;">
+                <h4 style="font-size: 14px; font-weight: bold; border-bottom: 1px solid #cbd5e1; padding-bottom: 5px; margin-bottom: 10px;">SCAN QRIS</h4>
+                ${payInfo.qrisUrl ? `<img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(payInfo.qrisUrl)}" style="width: 80px; height: 80px; border: 1px solid #ccc; padding: 5px; border-radius: 8px;" crossorigin="anonymous" />` : '<div style="font-size:12px; color:#94a3b8; border: 1px dashed #cbd5e1; padding: 20px;">Kosong</div>'}
+              </div>
+            ` : ''}
+          </div>
+          
+          <div style="text-align: center; padding-top: 10px; white-space: nowrap;">
+            <p style="font-size: 12px; margin: 0 0 50px 0;">Salam Hormat,</p>
+            <p style="font-size: 14px; font-weight: bold; border-bottom: 1px solid #0f172a; display: inline-block; padding-bottom: 2px; margin: 0;">${config.signatureName || 'Manajemen MTM'}</p>
+            <p style="font-size: 12px; color: #64748b; margin-top: 5px; margin-bottom: 0;">${config.signatureRole || 'Penyedia Layanan'}</p>
+          </div>
+        </div>
+
+        <div style="text-align: center; border-top: 1px solid #e2e8f0; padding-top: 15px; margin-top: 20px;">
+          <p style="font-size: 11px; color: #94a3b8; font-style: italic; margin: 0;">"${config.footerNote || ''}"</p>
+        </div>
       `;
+
       document.body.appendChild(invoiceElement);
       const canvas = await html2canvas(invoiceElement, { scale: 2, useCORS: true });
       const imgData = canvas.toDataURL('image/jpeg', 1.0);
@@ -182,7 +276,8 @@ export default function DriverHistoryPage() {
       pdf.addImage(imgData, 'JPEG', 0, 0, pdf.internal.pageSize.getWidth(), (canvas.height * pdf.internal.pageSize.getWidth()) / canvas.width);
       document.body.removeChild(invoiceElement);
       pdf.save(`Struk_${order.invoice}.pdf`);
-    } catch (e) { alert("Gagal."); } finally { setIsGeneratingPDF(null); }
+
+    } catch (e) { alert("Gagal memproses PDF Invoice."); } finally { setIsGeneratingPDF(null); }
   };
 
   return (

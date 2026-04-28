@@ -141,6 +141,9 @@ export default function OrderHistoryPage() {
     }
   };
 
+  // ==========================================================
+  // CETAK PDF INVOICE DENGAN STRUKTUR SETTING BARU
+  // ==========================================================
   const handleGenerateInvoice = async (order: any) => {
     if (!settings) return alert("Sedang memuat pengaturan, mohon klik lagi sebentar lagi...");
     setIsGeneratingPDF(order.id);
@@ -161,10 +164,16 @@ export default function OrderHistoryPage() {
       const currentTotal = subtotalJasa + shoppingCost + urgentFee;
 
       const invoiceElement = document.createElement("div");
-      invoiceElement.style.cssText = "position:absolute;left:-9999px;top:-9999px;width:800px;background:white;color:#1e293b;font-family:Arial;padding:40px;";
+      invoiceElement.style.cssText = "position:absolute;left:-9999px;top:-9999px;width:800px;background:white;color:#1e293b;font-family:Arial, sans-serif;padding:40px;";
       
       invoiceElement.innerHTML = `
-        ${config.showLogo ? `<div style="text-align: center; margin-bottom: 30px; border-bottom: 2px solid #e2e8f0; padding-bottom: 20px;"><img src="${settings.companyInfo.logoUrl}" style="height: 60px; margin-bottom: 10px; object-fit: contain;" crossorigin="anonymous"/><h1 style="font-size: 32px; font-weight: 900; margin: 0;">${settings.companyInfo?.name || 'MTM APP'}</h1><p style="font-size: 14px; color: #64748b; letter-spacing: 4px; margin-top: 5px;">INVOICE TAGIHAN LAYANAN</p></div>` : ''}
+        ${config.showLogo ? `
+          <div style="text-align: center; margin-bottom: 30px; border-bottom: 2px solid #e2e8f0; padding-bottom: 20px;">
+            ${settings.companyInfo?.logoUrl ? `<img src="${settings.companyInfo.logoUrl}" style="height: 60px; margin-bottom: 10px; object-fit: contain;" crossorigin="anonymous"/>` : ''}
+            <h1 style="font-size: 32px; font-weight: 900; margin: 0;">${settings.companyInfo?.name || 'MTM APP'}</h1>
+            <p style="font-size: 14px; color: #64748b; letter-spacing: 4px; margin-top: 5px;">INVOICE TAGIHAN LAYANAN</p>
+          </div>
+        ` : ''}
 
         <div style="display: flex; justify-content: space-between; margin-bottom: 30px;">
           <div>
@@ -232,14 +241,42 @@ export default function OrderHistoryPage() {
           </div>
         </div>
 
-        <div style="display: flex; justify-content: space-between; margin-bottom: 40px;">
-          <div style="flex: 1; margin-right: 20px; display: flex;">
-            ${config.showBank ? `<div style="flex: 1;"><h4 style="font-size: 14px; font-weight: bold; border-bottom: 1px solid #cbd5e1; padding-bottom: 5px; margin-bottom: 10px;">TRANSFER BANK</h4><p style="font-size: 12px; margin: 0 0 2px 0;">${payInfo.bankName || '-'}</p><p style="font-size: 16px; font-weight: bold; color: #2563eb; margin: 0;">${payInfo.accountNumber || '-'}</p><p style="font-size: 12px; margin: 2px 0 0 0;">A/N: ${payInfo.accountName || '-'}</p></div>` : ''}
-            ${config.showQris ? `<div style="text-align: center;"><h4 style="font-size: 14px; font-weight: bold; border-bottom: 1px solid #cbd5e1; padding-bottom: 5px; margin-bottom: 10px;">SCAN QRIS</h4>${payInfo.qrisUrl ? `<img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(payInfo.qrisUrl)}" style="width: 80px; height: 80px; border: 1px solid #ccc; padding: 5px; border-radius: 8px;" crossorigin="anonymous" />` : ''}</div>` : ''}
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 20px;">
+          <div style="flex: 1; display: flex; gap: 20px;">
+            ${config.showBank ? `
+              <div style="flex: 1;">
+                <h4 style="font-size: 14px; font-weight: bold; border-bottom: 1px solid #cbd5e1; padding-bottom: 5px; margin-bottom: 10px;">TRANSFER BANK</h4>
+                ${payInfo.banks && Array.isArray(payInfo.banks) ? payInfo.banks.map((bank:any) => `
+                  <div style="margin-bottom: 10px;">
+                    <p style="font-size: 14px; font-weight: bold; color: #2563eb; margin: 0;">${bank.bankName || 'BANK'} - ${bank.accountNumber || '-'}</p>
+                    <p style="font-size: 12px; color: #475569; margin: 2px 0 0 0;">A/N: ${bank.accountName || '-'}</p>
+                  </div>
+                `).join('') : `
+                  <div style="margin-bottom: 10px;">
+                    <p style="font-size: 14px; font-weight: bold; color: #2563eb; margin: 0;">${payInfo.bankName || 'BANK'} - ${payInfo.accountNumber || '-'}</p>
+                    <p style="font-size: 12px; color: #475569; margin: 2px 0 0 0;">A/N: ${payInfo.accountName || '-'}</p>
+                  </div>
+                `}
+              </div>
+            ` : ''}
+            
+            ${config.showQris ? `
+              <div style="text-align: center;">
+                <h4 style="font-size: 14px; font-weight: bold; border-bottom: 1px solid #cbd5e1; padding-bottom: 5px; margin-bottom: 10px;">SCAN QRIS</h4>
+                ${payInfo.qrisUrl ? `<img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(payInfo.qrisUrl)}" style="width: 80px; height: 80px; border: 1px solid #ccc; padding: 5px; border-radius: 8px;" crossorigin="anonymous" />` : '<div style="font-size:12px; color:#94a3b8; border: 1px dashed #cbd5e1; padding: 20px;">Kosong</div>'}
+              </div>
+            ` : ''}
           </div>
-          <div style="width: 200px; text-align: center; padding-top: 10px;">
-            <p style="font-size: 14px; margin: 0 0 50px 0;">Salam Hormat,</p><p style="font-size: 16px; font-weight: bold; border-bottom: 1px solid #0f172a; display: inline-block; padding-bottom: 2px; margin: 0;">Manajemen MTM</p>
+          
+          <div style="text-align: center; padding-top: 10px; white-space: nowrap;">
+            <p style="font-size: 12px; margin: 0 0 50px 0;">Salam Hormat,</p>
+            <p style="font-size: 14px; font-weight: bold; border-bottom: 1px solid #0f172a; display: inline-block; padding-bottom: 2px; margin: 0;">${config.signatureName || 'Manajemen MTM'}</p>
+            <p style="font-size: 12px; color: #64748b; margin-top: 5px; margin-bottom: 0;">${config.signatureRole || 'Penyedia Layanan'}</p>
           </div>
+        </div>
+
+        <div style="text-align: center; border-top: 1px solid #e2e8f0; padding-top: 15px; margin-top: 20px;">
+          <p style="font-size: 11px; color: #94a3b8; font-style: italic; margin: 0;">"${config.footerNote || ''}"</p>
         </div>
       `;
 
@@ -394,7 +431,6 @@ export default function OrderHistoryPage() {
                       <p className="text-[11px] font-medium text-slate-500 mt-0.5">{order.customerPhone}</p>
                     </td>
                     
-                    {/* BAGIAN LAYANAN YANG SUDAH DIPERBAIKI DETEKSI KOSONGNYA */}
                     <td className="px-4 py-3 whitespace-normal min-w-[220px] max-w-[280px]">
                       <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-500 uppercase border border-slate-200 tracking-wider mb-1 inline-block">
                         {order.category}

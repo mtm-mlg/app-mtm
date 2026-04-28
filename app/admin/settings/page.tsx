@@ -3,7 +3,8 @@ import { useState, useEffect } from "react";
 import { 
   Save, Clock, Info, Weight, 
   QrCode, CreditCard, Building, FileText, 
-  ToggleRight, ToggleLeft, Eye, Upload, Image as ImageIcon
+  ToggleRight, ToggleLeft, Eye, Upload, Image as ImageIcon,
+  Plus, Trash2, PenTool
 } from "lucide-react";
 import { db } from "@/lib/firebase";
 import { doc, getDoc, setDoc } from "firebase/firestore";
@@ -15,10 +16,17 @@ export default function SettingsPage() {
 
   const [companyInfo, setCompanyInfo] = useState({ name: "MTM APP", logoUrl: "" });
   const [commissionTiers, setCommissionTiers] = useState({ ringan: 70, sedang: 80, berat: 90 });
-  const [paymentInfo, setPaymentInfo] = useState({ qrisUrl: "", bankName: "BCA", accountNumber: "", accountName: "" });
+  
+  const [paymentInfo, setPaymentInfo] = useState({ 
+    qrisUrl: "", 
+    banks: [{ bankName: "BCA", accountNumber: "", accountName: "" }] 
+  });
+  
   const [invoiceConfig, setInvoiceConfig] = useState({
     showLogo: true, showQris: true, showBank: true,
     footerNote: "Terima kasih telah mempercayakan layanan Anda kepada MTM App. Harap simpan nota ini sebagai bukti pembayaran yang sah.",
+    signatureName: "Manajemen MTM",
+    signatureRole: "Penyedia Layanan"
   });
 
   const fetchSettings = async () => {
@@ -29,8 +37,28 @@ export default function SettingsPage() {
         const data = docSnap.data();
         if (data.companyInfo) setCompanyInfo(data.companyInfo);
         if (data.commissionTiers) setCommissionTiers(data.commissionTiers);
-        if (data.paymentInfo) setPaymentInfo(data.paymentInfo);
-        if (data.invoiceConfig) setInvoiceConfig(data.invoiceConfig);
+        
+        if (data.invoiceConfig) {
+          setInvoiceConfig({
+            ...invoiceConfig,
+            ...data.invoiceConfig
+          });
+        }
+        
+        if (data.paymentInfo) {
+          if (!data.paymentInfo.banks) {
+            setPaymentInfo({
+              qrisUrl: data.paymentInfo.qrisUrl || "",
+              banks: [{
+                bankName: data.paymentInfo.bankName || "",
+                accountNumber: data.paymentInfo.accountNumber || "",
+                accountName: data.paymentInfo.accountName || ""
+              }]
+            });
+          } else {
+            setPaymentInfo(data.paymentInfo);
+          }
+        }
       }
     } catch (error) {
       console.error("Gagal memuat pengaturan:", error);
@@ -69,12 +97,30 @@ export default function SettingsPage() {
   const handleUpdateTier = (tier: 'ringan'|'sedang'|'berat', value: string) => {
     setCommissionTiers({ ...commissionTiers, [tier]: parseInt(value) || 0 });
   };
-  const handlePaymentInfo = (field: string, value: string) => {
-    setPaymentInfo({ ...paymentInfo, [field]: value });
+  
+  const handleQrisChange = (value: string) => {
+    setPaymentInfo({ ...paymentInfo, qrisUrl: value });
   };
+  const handleAddBank = () => {
+    setPaymentInfo({
+      ...paymentInfo,
+      banks: [...paymentInfo.banks, { bankName: "", accountNumber: "", accountName: "" }]
+    });
+  };
+  const handleRemoveBank = (index: number) => {
+    const newBanks = [...paymentInfo.banks];
+    newBanks.splice(index, 1);
+    setPaymentInfo({ ...paymentInfo, banks: newBanks });
+  };
+  const handleBankChange = (index: number, field: string, value: string) => {
+    const newBanks = [...paymentInfo.banks];
+    newBanks[index] = { ...newBanks[index], [field]: value };
+    setPaymentInfo({ ...paymentInfo, banks: newBanks });
+  };
+
   const handleToggleInvoice = (field: keyof typeof invoiceConfig) => {
-    if (field === 'footerNote') return;
-    setInvoiceConfig({ ...invoiceConfig, [field]: !invoiceConfig[field] });
+    if (field === 'footerNote' || field === 'signatureName' || field === 'signatureRole') return;
+    setInvoiceConfig({ ...invoiceConfig, [field]: !invoiceConfig[field as keyof typeof invoiceConfig] });
   };
 
   const handleSave = async () => {
@@ -168,29 +214,57 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* PEMBAYARAN */}
+          {/* PEMBAYARAN: QRIS & MULTI REKENING */}
           <div className="bg-white rounded-[1.5rem] p-6 shadow-sm border border-slate-200">
             <h3 className="text-lg font-bold text-slate-800 mb-5 flex items-center gap-2 border-b border-slate-100 pb-3">
               <CreditCard className="text-blue-600" size={20} /> Rekening & QRIS
             </h3>
-            <div className="space-y-4">
+            
+            <div className="space-y-6">
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-slate-700 ml-1 flex items-center gap-1.5"><QrCode size={14}/> Link / ID QRIS Dinamis</label>
-                <input type="text" value={paymentInfo.qrisUrl} onChange={(e) => handlePaymentInfo('qrisUrl', e.target.value)} placeholder="https://..." className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl outline-none focus:border-blue-500 focus:bg-white text-sm font-medium transition-all" />
+                <input type="text" value={paymentInfo.qrisUrl} onChange={(e) => handleQrisChange(e.target.value)} placeholder="https://..." className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl outline-none focus:border-blue-500 focus:bg-white text-sm font-medium transition-all" />
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 ml-1 flex items-center gap-1.5"><Building size={14}/> Nama Bank</label>
-                  <input type="text" value={paymentInfo.bankName} onChange={(e) => handlePaymentInfo('bankName', e.target.value)} placeholder="BCA / Mandiri" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl outline-none focus:border-blue-500 focus:bg-white text-sm font-bold uppercase transition-all" />
+
+              <div className="border-t border-slate-200 pt-4">
+                <label className="text-xs font-bold text-slate-700 ml-1 flex items-center gap-1.5 mb-3"><Building size={14}/> Daftar Rekening Bank Tujuan</label>
+                
+                <div className="space-y-4">
+                  {paymentInfo.banks.map((bank, index) => (
+                    <div key={index} className="p-4 bg-slate-50 border border-slate-200 rounded-xl relative transition-all group">
+                      
+                      {paymentInfo.banks.length > 1 && (
+                        <button 
+                          type="button" 
+                          onClick={() => handleRemoveBank(index)} 
+                          className="absolute -top-3 -right-3 bg-rose-50 border border-rose-200 text-rose-500 hover:bg-rose-500 hover:text-white p-1.5 rounded-lg transition-colors shadow-sm"
+                          title="Hapus Rekening Ini"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Nama Bank / E-Wallet</label>
+                          <input type="text" value={bank.bankName} onChange={(e) => handleBankChange(index, 'bankName', e.target.value)} placeholder="BCA / Mandiri / DANA" className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg outline-none focus:border-blue-500 text-sm font-bold uppercase transition-all" />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Nomor Rekening / HP</label>
+                          <input type="text" value={bank.accountNumber} onChange={(e) => handleBankChange(index, 'accountNumber', e.target.value)} placeholder="123456..." className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg outline-none focus:border-blue-500 text-sm font-black tracking-widest transition-all" />
+                        </div>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Atas Nama (A/N)</label>
+                        <input type="text" value={bank.accountName} onChange={(e) => handleBankChange(index, 'accountName', e.target.value)} placeholder="Nama Pemilik Rekening" className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg outline-none focus:border-blue-500 text-sm font-bold transition-all" />
+                      </div>
+                    </div>
+                  ))}
+                  
+                  <button type="button" onClick={handleAddBank} className="text-xs font-bold text-blue-600 bg-blue-50 border border-blue-200 hover:bg-blue-100 py-3 rounded-xl w-full flex justify-center items-center gap-1.5 transition-colors shadow-sm">
+                    <Plus size={16} strokeWidth={3} /> Tambah Rekening Lain
+                  </button>
                 </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 ml-1 text-sm">Nomor Rekening</label>
-                  <input type="text" value={paymentInfo.accountNumber} onChange={(e) => handlePaymentInfo('accountNumber', e.target.value)} placeholder="1234..." className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl outline-none focus:border-blue-500 focus:bg-white text-sm font-black tracking-widest transition-all" />
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 ml-1">Atas Nama (A/N)</label>
-                <input type="text" value={paymentInfo.accountName} onChange={(e) => handlePaymentInfo('accountName', e.target.value)} placeholder="Nama Pemilik" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl outline-none focus:border-blue-500 focus:bg-white text-sm font-bold transition-all" />
               </div>
             </div>
           </div>
@@ -200,7 +274,8 @@ export default function SettingsPage() {
             <h3 className="text-lg font-bold text-slate-800 mb-5 flex items-center gap-2 border-b border-slate-100 pb-3">
               <FileText className="text-indigo-600" size={20} /> Konfigurasi Tampilan Nota
             </h3>
-            <div className="space-y-2">
+            
+            <div className="space-y-2 mb-6">
               {[
                 { id: 'showLogo', label: 'Tampilkan Header', desc: 'Logo dan Nama Perusahaan.' },
                 { id: 'showQris', label: 'Tampilkan QRIS', desc: 'Barcode / Link pembayaran QRIS.' },
@@ -216,22 +291,53 @@ export default function SettingsPage() {
                   </button>
                 </div>
               ))}
-              <div className="pt-3 px-2">
-                <label className="text-xs font-bold text-slate-700 block mb-2">Catatan Kaki (Footer)</label>
-                <textarea value={invoiceConfig.footerNote} onChange={(e) => setInvoiceConfig({...invoiceConfig, footerNote: e.target.value})} rows={2} className="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl outline-none focus:border-indigo-500 text-xs font-medium text-slate-600 resize-none"></textarea>
+            </div>
+
+            {/* TANDA TANGAN DINAMIS */}
+            <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 space-y-4 mb-4">
+              <h4 className="text-xs font-bold text-indigo-800 flex items-center gap-1.5 mb-1">
+                <PenTool size={14} /> Tanda Tangan Digital (Penutup)
+              </h4>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Nama Tanda Tangan</label>
+                  <input 
+                    type="text" 
+                    value={invoiceConfig.signatureName} 
+                    onChange={(e) => setInvoiceConfig({...invoiceConfig, signatureName: e.target.value})} 
+                    placeholder="Manajemen MTM" 
+                    className="w-full px-3 py-2.5 bg-white border border-slate-300 rounded-lg outline-none focus:border-indigo-500 text-sm font-bold transition-all" 
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Jabatan / Role</label>
+                  <input 
+                    type="text" 
+                    value={invoiceConfig.signatureRole} 
+                    onChange={(e) => setInvoiceConfig({...invoiceConfig, signatureRole: e.target.value})} 
+                    placeholder="Penyedia Layanan" 
+                    className="w-full px-3 py-2.5 bg-white border border-slate-300 rounded-lg outline-none focus:border-indigo-500 text-sm font-medium transition-all" 
+                  />
+                </div>
               </div>
             </div>
+
+            <div className="px-2 pt-2">
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2 ml-1">Catatan Kaki (Footer)</label>
+              <textarea value={invoiceConfig.footerNote} onChange={(e) => setInvoiceConfig({...invoiceConfig, footerNote: e.target.value})} rows={2} className="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl outline-none focus:border-indigo-500 text-xs font-medium text-slate-600 resize-none"></textarea>
+            </div>
+
           </div>
         </div>
 
-        {/* KOLOM KANAN: LIVE PREVIEW INVOICE A4 (DIPERBAIKI UNTUK RESPONSIVITAS) */}
+        {/* KOLOM KANAN: LIVE PREVIEW INVOICE A4 */}
         <div className="xl:col-span-5 relative">
           <div className="sticky top-8">
             <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-2">
               <Eye size={16} /> Live Preview Invoice
             </h3>
             
-            {/* WRAPPER RESPONSIVE SCROLL */}
             <div className="w-full overflow-x-auto pb-4 rounded-xl hide-scrollbar bg-slate-100/50 p-2 md:p-4 border border-slate-200 shadow-inner">
               <div className="bg-white p-6 rounded-lg shadow-md text-[10px] md:text-xs text-slate-800 min-w-[400px] mx-auto" style={{ fontFamily: "Arial, sans-serif" }}>
                 
@@ -287,12 +393,16 @@ export default function SettingsPage() {
                   </thead>
                   <tbody>
                     <tr className="border-b border-slate-100">
-                      <td className="p-2">
-                        <div className="font-bold text-slate-800">Antar Jemput (Motor)</div>
+                      <td className="p-2 align-top">
+                        <div className="font-bold text-slate-800 text-[11px]">Antar Jemput (Motor)</div>
+                        <div className="mt-1.5 p-1.5 bg-[#fcfcfc] border-l-2 border-amber-500 text-slate-600 text-[8px] rounded-r whitespace-pre-wrap leading-relaxed">
+                          <strong>Catatan/Detail Pekerjaan:</strong><br/>Tolong ambilkan dokumen di meja resepsionis, sampaikan kalau ini titipan dari Pak Budi.
+                        </div>
+                        <div className="text-[8px] text-slate-400 mt-1">Ongkos Kirim / Tarif Jasa</div>
                       </td>
-                      <td className="p-2 text-right text-slate-600">18 KM</td>
-                      <td className="p-2 text-right text-slate-600">Rp 2.500</td>
-                      <td className="p-2 text-right font-bold text-slate-800">Rp 45.000</td>
+                      <td className="p-2 text-right text-slate-600 align-top">18 KM</td>
+                      <td className="p-2 text-right text-slate-600 align-top">Rp 2.500</td>
+                      <td className="p-2 text-right font-bold text-slate-800 align-top">Rp 45.000</td>
                     </tr>
                     <tr className="border-b border-slate-100">
                       <td className="p-2 font-bold text-rose-600">Biaya Urgent</td>
@@ -311,19 +421,24 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
-                {/* PEMBAYARAN & TANDA TANGAN */}
-                <div className="flex justify-between items-start mb-4">
-                  <div className="flex-1 pr-4 flex gap-3">
+                {/* PEMBAYARAN (MULTI REKENING) & TANDA TANGAN */}
+                <div className="flex justify-between items-start mb-2 gap-4">
+                  <div className="flex-1 flex gap-4">
                     {invoiceConfig.showBank && (
                       <div className="flex-1">
-                        <h4 className="font-bold text-[9px] text-slate-800 border-b border-slate-200 pb-1 mb-1.5 mt-0">TRANSFER BANK</h4>
-                        <p className="text-[11px] font-black text-blue-600 m-0">{paymentInfo.bankName || "BCA"} - {paymentInfo.accountNumber || "123456789"}</p>
-                        <p className="text-[9px] text-slate-600 font-medium m-0">A/N: {paymentInfo.accountName || "Nama Pemilik"}</p>
+                        <h4 className="font-bold text-[7px] text-slate-800 border-b border-slate-200 pb-1 mb-1.5 mt-0">TRANSFER BANK</h4>
+                        {/* LOOPING REKENING YANG DITAMBAHKAN */}
+                        {paymentInfo.banks.map((bank, idx) => (
+                          <div key={idx} className="mb-2">
+                            <p className="text-[7px] font-black text-blue-600 m-0">{bank.bankName || "NAMA BANK"} - {bank.accountNumber || "NO REKENING"}</p>
+                            <p className="text-[7px] text-slate-600 font-medium m-0">A/N: {bank.accountName || "Nama Pemilik"}</p>
+                          </div>
+                        ))}
                       </div>
                     )}
                     {invoiceConfig.showQris && (
                       <div className="text-center">
-                        <h4 className="font-bold text-[9px] text-slate-800 border-b border-slate-200 pb-1 mb-1.5 mt-0">SCAN QRIS</h4>
+                        <h4 className="font-bold text-[7px] text-slate-800 border-b border-slate-200 pb-1 mb-1.5 mt-0">SCAN QRIS</h4>
                         {paymentInfo.qrisUrl ? (
                           <img src={`https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(paymentInfo.qrisUrl)}`} alt="QRIS" className="w-12 h-12 mx-auto border border-slate-200 p-0.5 rounded bg-white" />
                         ) : (
@@ -333,15 +448,21 @@ export default function SettingsPage() {
                     )}
                   </div>
                   
-                  <div className="w-24 text-center pt-1">
-                    <p className="text-[9px] text-slate-800 mb-8 m-0">Salam Hormat,</p>
-                    <p className="text-[10px] font-black text-slate-800 border-b border-slate-800 inline-block pb-0.5 m-0">Direktur Utama</p>
-                    <p className="text-[8px] text-slate-500 mt-1 m-0">Manajemen MTM</p>
+                  {/* PREVIEW TANDA TANGAN DINAMIS DENGAN TATA LETAK BARU */}
+                  <div className="text-center pt-1 shrink-0">
+                    <p className="text-[7px] text-slate-800 mb-8 m-0">Salam Hormat,</p>
+                    <p className="text-[7px] font-bold text-slate-800 border-b border-slate-800 inline-block pb-0.5 m-0 whitespace-nowrap">
+                      {invoiceConfig.signatureName || "Manajemen MTM"}
+                    </p>
+                    <p className="text-[7px] text-slate-500 mt-1 m-0 whitespace-nowrap">
+                      {invoiceConfig.signatureRole || "Penyedia Layanan"}
+                    </p>
                   </div>
+
                 </div>
 
                 {/* FOOTER NOTA */}
-                <div className="text-center border-t border-slate-200 pt-3">
+                <div className="text-center border-t border-slate-200 pt-3 mt-4">
                   <p className="text-[8px] text-slate-400 italic m-0">"{invoiceConfig.footerNote}"</p>
                 </div>
 
