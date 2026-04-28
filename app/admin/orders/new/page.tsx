@@ -12,12 +12,10 @@ export default function NewOrderPage() {
   const [isLoaded, setIsLoaded] = useState(false);
   const router = useRouter();
   
-  // STATE UNTUK DAFTAR DRIVER DINAMIS DARI DATABASE
   const [availableDrivers, setAvailableDrivers] = useState<any[]>([]);
 
   useEffect(() => {
     setIsLoaded(true);
-    // Tarik daftar driver saat halaman dimuat
     const fetchDrivers = async () => {
       try {
         const res = await fetch("/api/drivers");
@@ -32,45 +30,35 @@ export default function NewOrderPage() {
     fetchDrivers();
   }, []);
 
-  // STATE INFO PELANGGAN
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerAddress, setCustomerAddress] = useState(""); 
 
-  // ========================================================
-  // STATE KATEGORI (SEKARANG ARRAY AGAR BISA PILIH LEBIH DARI 1)
-  // ========================================================
   const [selectedCategories, setSelectedCategories] = useState<string[]>(["Jarak"]);
   
-  // STATE CUSTOM INPUT JASA
   const [customServiceName, setCustomServiceName] = useState("");
-  const [serviceDetails, setServiceDetails] = useState(""); // <-- STATE BARU UNTUK DETAIL PANJANG
+  const [serviceDetails, setServiceDetails] = useState(""); 
   const [basePrice, setBasePrice] = useState<number | "">("");
   const [quantity, setQuantity] = useState<number | "">(1);
   const [unit, setUnit] = useState("KM"); 
   
-  // STATE LOKASI (MAPS API)
+  // STATE LOKASI RUTENYA DRIVER
   const [origin, setOrigin] = useState("");
   const [destination, setDestination] = useState("");
   const [isCalculatingMap, setIsCalculatingMap] = useState(false);
 
-  // STATE KRITERIA KOMISI (Ringan / Sedang / Berat)
   const [commissionTier, setCommissionTier] = useState("sedang");
   const [driverCommissionPct, setDriverCommissionPct] = useState<number | "">(80); 
   
-  // STATE PENUGASAN & URGENT
   const [driverCode, setDriverCode] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("qris");
   const [isUrgent, setIsUrgent] = useState(false);
   const [urgentFee, setUrgentFee] = useState<number | "">(15000);
 
-  // STATE SUBMIT FORM
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // FUNGSI TOGGLE KATEGORI (BISA NYALA BANYAK SEKALIGUS)
   const toggleCategory = (id: string) => {
     if (selectedCategories.includes(id)) {
-      // Jangan izinkan kosong, minimal 1 kategori harus nyala
       if (selectedCategories.length > 1) {
         setSelectedCategories(selectedCategories.filter(cat => cat !== id));
       }
@@ -79,7 +67,6 @@ export default function NewOrderPage() {
     }
   };
 
-  // HELPER GANTI SATUAN OTOMATIS SAAT KATEGORI BERUBAH
   useEffect(() => {
     if (selectedCategories.length > 1) {
       setUnit("Paket/Mix");
@@ -93,7 +80,6 @@ export default function NewOrderPage() {
     }
   }, [selectedCategories]);
 
-  // HELPER GANTI PERSENTASE SAAT KRITERIA BERUBAH
   const handleTierChange = (tier: string) => {
     setCommissionTier(tier);
     if (tier === "ringan") setDriverCommissionPct(70);
@@ -101,11 +87,10 @@ export default function NewOrderPage() {
     if (tier === "berat") setDriverCommissionPct(90);
   };
 
-  // FUNGSI HITUNG JARAK OTOMATIS (CALL BACKEND API)
   const handleHitungKM = async (e: React.MouseEvent) => {
     e.preventDefault();
     if (!origin || !destination) {
-      alert("Harap masukkan titik jemput dan titik tujuan terlebih dahulu!");
+      alert("Harap masukkan alamat 'Dari' dan 'Ke' terlebih dahulu untuk menghitung KM otomatis!");
       return;
     }
     setIsCalculatingMap(true);
@@ -116,7 +101,7 @@ export default function NewOrderPage() {
         setQuantity(data.distance.value); 
         alert(`Jarak ditemukan: ${data.distance.text}\nEstimasi Waktu: ${data.duration}`);
       } else {
-        alert(`Gagal menghitung: ${data.error || "Lokasi tidak ditemukan."}`);
+        alert(`Gagal menghitung: ${data.error || "Lokasi tidak ditemukan di Google Maps."}`);
       }
     } catch (error) {
       alert("Terjadi kesalahan jaringan saat menghitung jarak.");
@@ -125,21 +110,13 @@ export default function NewOrderPage() {
     }
   };
 
-  // ========================================================
-  // KALKULATOR TOTAL
-  // ========================================================
   const numBasePrice = Number(basePrice) || 0;
   const numQty = selectedCategories.includes("Waktu") && unit === "Borongan/Flat" ? 1 : (Number(quantity) || 1);
-  const subtotalJasa = numBasePrice * numQty; // Ini yang kena komisi
+  const subtotalJasa = numBasePrice * numQty; 
   
   const numUrgentFee = isUrgent ? (Number(urgentFee) || 0) : 0;
-  
-  // Total harga di owner hanya menghitung Tarif Jasa + Urgent (Talangan belanja diset oleh driver nanti)
   const totalHarga = subtotalJasa + numUrgentFee;
 
-  // ========================================================
-  // FUNGSI SUBMIT KE FIREBASE BACKEND
-  // ========================================================
   const submitOrder = async () => {
     if (!customerName || !customerPhone || !customerAddress || !customServiceName || !basePrice) {
       alert("Peringatan: Nama Pelanggan, No WA, Alamat, Nama Jasa, dan Tarif Dasar wajib diisi!");
@@ -176,14 +153,17 @@ export default function NewOrderPage() {
         customerAddress, 
         category: selectedCategories.join(", "), 
         serviceName: customServiceName,
-        serviceDetails: serviceDetails, // <-- TAMBAHAN: Menyimpan detail ke Firebase
+        serviceDetails: serviceDetails, 
         basePrice: numBasePrice, 
         shoppingCost: 0, 
         unit,
         quantity: numQty,
         commissionTier,
-        origin: selectedCategories.includes("Jarak") ? origin : null,
-        destination: selectedCategories.includes("Jarak") ? destination : null,
+        
+        // MENGIRIMKAN DATA ALAMAT DARI & KE UNTUK DIBACA DRIVER
+        origin: origin || null,
+        destination: destination || null,
+        
         driverCode: driverCode || null,
         paymentMethod,
         isUrgent,
@@ -223,7 +203,6 @@ export default function NewOrderPage() {
   return (
     <div className={`max-w-[1400px] mx-auto pb-20 transition-all duration-700 ${isLoaded ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}>
       
-      {/* HEADER PAGE */}
       <div className="mb-8 border-b border-slate-200 pb-5 mt-2">
         <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Buat Pesanan Custom</h2>
         <p className="text-slate-500 mt-1.5 text-sm font-medium flex items-center gap-2">
@@ -233,12 +212,8 @@ export default function NewOrderPage() {
 
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
         
-        {/* ========================================================= */}
-        {/* BAGIAN KIRI: FORM INPUT UTAMA */}
-        {/* ========================================================= */}
         <div className="xl:col-span-7 space-y-6">
           
-          {/* KARTU 1: INFO PELANGGAN */}
           <div className="bg-white rounded-[1.5rem] p-6 shadow-sm border border-slate-200">
             <div className="flex items-center gap-3 mb-5 border-b border-slate-100 pb-3">
               <div className="p-2 bg-blue-50 text-blue-600 rounded-lg"><User size={18} strokeWidth={2.5} /></div>
@@ -273,16 +248,17 @@ export default function NewOrderPage() {
                 </div>
               </div>
 
-              {/* KOLOM ALAMAT/LINK LOKASI */}
               <div className="space-y-1.5 md:col-span-2">
-                <label className="text-xs font-bold text-slate-700 ml-1">Alamat Lengkap / Link Maps Pelanggan</label>
+                <label className="text-xs font-bold text-slate-700 ml-1 flex justify-between items-center w-full">
+                  <span>Alamat Lengkap (Patokan Penagihan/Utama)</span>
+                </label>
                 <div className="flex items-center w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-100 transition-all overflow-hidden">
                   <MapPin size={16} className="text-slate-400 mr-2 shrink-0" />
                   <input 
                     type="text" 
                     value={customerAddress}
                     onChange={(e) => setCustomerAddress(e.target.value)}
-                    placeholder="Contoh: Perum. Indah Blok A1 atau Paste Link Gmaps..." 
+                    placeholder="Contoh: Perum. Indah Blok A1 / Depan Indomaret..." 
                     className="flex-1 w-full bg-transparent border-0 outline-none focus:ring-0 p-0 text-slate-800 text-sm font-medium" 
                   />
                 </div>
@@ -290,11 +266,10 @@ export default function NewOrderPage() {
             </div>
           </div>
 
-          {/* KARTU 2: PEMILIHAN KATEGORI & CUSTOM JASA */}
           <div className="bg-white rounded-[1.5rem] p-6 shadow-sm border border-slate-200">
             <div className="flex items-center gap-3 mb-5 border-b border-slate-100 pb-3">
               <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg"><Package size={18} strokeWidth={2.5} /></div>
-              <h3 className="text-lg font-bold text-slate-800 tracking-tight">Detail Rincian Jasa (Custom)</h3>
+              <h3 className="text-lg font-bold text-slate-800 tracking-tight">Detail Rincian Jasa</h3>
             </div>
             
             <p className="text-xs text-slate-500 mb-3 font-medium">Bisa pilih lebih dari satu kategori (Multi-Jasa):</p>
@@ -318,43 +293,61 @@ export default function NewOrderPage() {
               })}
             </div>
 
-            {selectedCategories.includes("Jarak") && (
-              <div className="mb-6 animate-in fade-in slide-in-from-top-2 bg-blue-50 p-4 rounded-2xl border border-blue-100 shadow-sm">
-                <label className="text-xs font-extrabold text-blue-800 ml-1 flex items-center gap-1.5 mb-3">
-                  <Map size={14} /> Kalkulator Jarak Otomatis
+            {/* ========================================================== */}
+            {/* BLOK LOKASI DARI & KE (DIPERJELAS FUNGSINYA) */}
+            {/* ========================================================== */}
+            <div className="mb-6 animate-in fade-in slide-in-from-top-2 bg-blue-50/80 p-5 rounded-2xl border border-blue-100 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <label className="text-sm font-extrabold text-blue-800 flex items-center gap-1.5">
+                  <Map size={16} /> Rute & Lokasi Tugas (Opsional)
                 </label>
-                <div className="flex flex-col md:flex-row gap-3">
-                  <div className="flex items-center flex-1 px-4 py-3 bg-white border border-slate-200 rounded-xl focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 transition-all overflow-hidden">
+                <span className="text-[10px] font-bold bg-blue-100 text-blue-600 px-2 py-1 rounded shadow-sm border border-blue-200">Dilihat oleh Driver</span>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest ml-1">Dari (Penjemputan / Titik Awal)</label>
+                  <div className="flex items-center w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 transition-all overflow-hidden shadow-sm">
                     <MapPin size={16} className="text-blue-500 mr-2 shrink-0" />
                     <input 
                       type="text" 
                       value={origin}
                       onChange={(e) => setOrigin(e.target.value)}
-                      placeholder="Lokasi Penjemputan..." 
-                      className="flex-1 w-full bg-transparent border-0 outline-none p-0 text-slate-800 text-sm font-medium placeholder-slate-400" 
+                      placeholder="Ketik alamat lengkap asal..." 
+                      className="flex-1 w-full bg-transparent border-0 outline-none p-0 text-slate-800 text-sm font-bold placeholder-slate-400" 
                     />
                   </div>
-                  <div className="flex items-center flex-1 px-4 py-3 bg-white border border-slate-200 rounded-xl focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 transition-all overflow-hidden">
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest ml-1">Ke (Pengiriman / Titik Tujuan)</label>
+                  <div className="flex items-center w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 transition-all overflow-hidden shadow-sm">
                     <Map size={16} className="text-rose-500 mr-2 shrink-0" />
                     <input 
                       type="text" 
                       value={destination}
                       onChange={(e) => setDestination(e.target.value)}
-                      placeholder="Lokasi Tujuan..." 
-                      className="flex-1 w-full bg-transparent border-0 outline-none p-0 text-slate-800 text-sm font-medium placeholder-slate-400" 
+                      placeholder="Ketik alamat lengkap tujuan..." 
+                      className="flex-1 w-full bg-transparent border-0 outline-none p-0 text-slate-800 text-sm font-bold placeholder-slate-400" 
                     />
                   </div>
-                  <button 
-                    onClick={handleHitungKM}
-                    disabled={isCalculatingMap}
-                    className="px-5 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 text-white text-sm font-bold rounded-xl shadow-sm transition-all whitespace-nowrap active:scale-95 flex items-center justify-center gap-2"
-                  >
-                    {isCalculatingMap ? <Clock size={16} className="animate-spin" /> : <Calculator size={16} />}
-                    {isCalculatingMap ? "Menghitung..." : "Hitung KM"}
-                  </button>
                 </div>
               </div>
-            )}
+
+              <div className="flex flex-col md:flex-row items-center justify-between gap-4 bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
+                <p className="text-[10px] text-slate-500 font-medium md:max-w-[240px] leading-relaxed">
+                  <Info size={12} className="inline mr-1 text-blue-500 mb-0.5" />
+                  Alamat di atas akan dikirim ke radar driver. Jika butuh menghitung <strong className="text-slate-600">Tarif per-KM</strong>, klik tombol di samping.
+                </p>
+                <button 
+                  onClick={handleHitungKM}
+                  disabled={isCalculatingMap}
+                  className="w-full md:w-auto px-4 py-2.5 bg-slate-800 hover:bg-slate-900 disabled:bg-slate-400 text-white text-xs font-bold rounded-lg shadow-sm transition-all whitespace-nowrap active:scale-95 flex items-center justify-center gap-1.5"
+                >
+                  {isCalculatingMap ? <Clock size={14} className="animate-spin" /> : <Calculator size={14} />}
+                  {isCalculatingMap ? "Menghitung Jarak..." : "Hitung Jarak (KM)"}
+                </button>
+              </div>
+            </div>
 
             <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-5">
               <div className="space-y-1.5">
@@ -368,15 +361,12 @@ export default function NewOrderPage() {
                 />
               </div>
 
-              {/* ======================================================== */}
-              {/* TEXTAREA BARU UNTUK DETAIL PEKERJAAN YANG PANJANG */}
-              {/* ======================================================== */}
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-slate-700 ml-1">Detail Pekerjaan (Opsional)</label>
                 <textarea 
                   value={serviceDetails}
                   onChange={(e) => setServiceDetails(e.target.value)}
-                  placeholder="Tuliskan instruksi lengkap untuk driver (misal: daftar rincian belanjaan, patokan alamat, dll)..." 
+                  placeholder="Tuliskan instruksi lengkap untuk driver (misal: daftar rincian belanjaan, dll)..." 
                   rows={4}
                   className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100 transition-all text-slate-800 text-sm font-medium resize-y min-h-[100px]" 
                 />
@@ -467,9 +457,6 @@ export default function NewOrderPage() {
           </div>
         </div>
 
-        {/* ========================================================= */}
-        {/* BAGIAN KANAN: PENUGASAN, URGENT & NOTA PELANGGAN */}
-        {/* ========================================================= */}
         <div className="xl:col-span-5 relative">
           
           <div className="bg-white rounded-[1.5rem] p-6 shadow-sm border border-slate-200 sticky top-8">
@@ -577,9 +564,6 @@ export default function NewOrderPage() {
                 </div>
               </div>
 
-              {/* ================================================ */}
-              {/* TOMBOL TERBITKAN INVOICE */}
-              {/* ================================================ */}
               <div className="pt-2">
                 <button 
                   onClick={submitOrder}

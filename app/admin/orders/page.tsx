@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { 
   Search, FileDown, Filter, ChevronLeft, ChevronRight, 
-  Info, Clock, Camera, X, Trash2, XCircle, Send
+  Info, Clock, Camera, X, Trash2, XCircle, Send, MapPin, Map
 } from "lucide-react";
 import { db } from "@/lib/firebase";
 import { doc, deleteDoc, updateDoc, getDoc } from "firebase/firestore";
@@ -141,9 +141,6 @@ export default function OrderHistoryPage() {
     }
   };
 
-  // ==========================================================
-  // CETAK PDF INVOICE DENGAN STRUKTUR SETTING BARU
-  // ==========================================================
   const handleGenerateInvoice = async (order: any) => {
     if (!settings) return alert("Sedang memuat pengaturan, mohon klik lagi sebentar lagi...");
     setIsGeneratingPDF(order.id);
@@ -431,7 +428,7 @@ export default function OrderHistoryPage() {
                       <p className="text-[11px] font-medium text-slate-500 mt-0.5">{order.customerPhone}</p>
                     </td>
                     
-                    <td className="px-4 py-3 whitespace-normal min-w-[220px] max-w-[280px]">
+                    <td className="px-4 py-3 whitespace-normal min-w-[240px] max-w-[300px]">
                       <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-500 uppercase border border-slate-200 tracking-wider mb-1 inline-block">
                         {order.category}
                       </span>
@@ -447,6 +444,41 @@ export default function OrderHistoryPage() {
                           <Info size={12} /> Tidak ada catatan
                         </div>
                       )}
+
+                      {/* ================================================= */}
+                      {/* LOKASI DARI & KE DENGAN TAMPILAN RAPI */}
+                      {/* ================================================= */}
+                      <div className="mt-3 pt-2 border-t border-slate-100 space-y-1.5">
+                        {order.origin && (
+                          <div className="flex items-start gap-1.5">
+                            <div className="p-1 bg-blue-50 text-blue-500 rounded mt-0.5 shrink-0"><MapPin size={10} /></div>
+                            <div className="w-full leading-tight">
+                              <p className="text-[8px] font-bold text-slate-400 uppercase mb-0.5">Dari</p>
+                              <p className="text-[11px] font-semibold text-slate-700 line-clamp-2">{order.origin}</p>
+                            </div>
+                          </div>
+                        )}
+                        {order.destination && (
+                          <div className="flex items-start gap-1.5 relative">
+                            {order.origin && <div className="absolute left-[9px] -top-2 bottom-4 w-px border-l border-dashed border-slate-300"></div>}
+                            <div className="p-1 bg-rose-50 text-rose-500 rounded mt-0.5 shrink-0 z-10"><Map size={10} /></div>
+                            <div className="w-full leading-tight">
+                              <p className="text-[8px] font-bold text-slate-400 uppercase mb-0.5">Ke</p>
+                              <p className="text-[11px] font-semibold text-slate-700 line-clamp-2">{order.destination}</p>
+                            </div>
+                          </div>
+                        )}
+                        {(!order.origin && !order.destination) && order.customerAddress && (
+                          <div className="flex items-start gap-1.5">
+                            <div className="p-1 bg-slate-100 text-slate-500 rounded mt-0.5 shrink-0"><MapPin size={10} /></div>
+                            <div className="w-full leading-tight">
+                              <p className="text-[8px] font-bold text-slate-400 uppercase mb-0.5">Alamat</p>
+                              <p className="text-[11px] font-semibold text-slate-700 line-clamp-2">{order.customerAddress}</p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
                     </td>
                     
                     <td className="px-4 py-3 text-[12px] font-medium">
