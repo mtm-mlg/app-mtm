@@ -44,6 +44,7 @@ export default function NewOrderPage() {
   
   // STATE CUSTOM INPUT JASA
   const [customServiceName, setCustomServiceName] = useState("");
+  const [serviceDetails, setServiceDetails] = useState(""); // <-- STATE BARU UNTUK DETAIL PANJANG
   const [basePrice, setBasePrice] = useState<number | "">("");
   const [quantity, setQuantity] = useState<number | "">(1);
   const [unit, setUnit] = useState("KM"); 
@@ -175,8 +176,9 @@ export default function NewOrderPage() {
         customerAddress, 
         category: selectedCategories.join(", "), 
         serviceName: customServiceName,
+        serviceDetails: serviceDetails, // <-- TAMBAHAN: Menyimpan detail ke Firebase
         basePrice: numBasePrice, 
-        shoppingCost: 0, // <-- Di-set 0 dari sisi Owner. Driver yang akan update nilai ini di aplikasinya.
+        shoppingCost: 0, 
         unit,
         quantity: numQty,
         commissionTier,
@@ -356,13 +358,27 @@ export default function NewOrderPage() {
 
             <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-5">
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 ml-1">Nama Jasa / Rincian Pekerjaan</label>
+                <label className="text-xs font-bold text-slate-700 ml-1">Nama Jasa / Judul Pekerjaan</label>
                 <input 
                   type="text" 
                   value={customServiceName}
                   onChange={(e) => setCustomServiceName(e.target.value)}
                   placeholder={`Contoh: ${selectedCategories.includes('Belanja') ? 'Beli Nasi Goreng & Antar ke Stasiun' : 'Antar Dokumen ke Stasiun'}`} 
                   className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100 transition-all text-slate-800 text-sm font-bold" 
+                />
+              </div>
+
+              {/* ======================================================== */}
+              {/* TEXTAREA BARU UNTUK DETAIL PEKERJAAN YANG PANJANG */}
+              {/* ======================================================== */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-700 ml-1">Detail Pekerjaan (Opsional)</label>
+                <textarea 
+                  value={serviceDetails}
+                  onChange={(e) => setServiceDetails(e.target.value)}
+                  placeholder="Tuliskan instruksi lengkap untuk driver (misal: daftar rincian belanjaan, patokan alamat, dll)..." 
+                  rows={4}
+                  className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100 transition-all text-slate-800 text-sm font-medium resize-y min-h-[100px]" 
                 />
               </div>
 

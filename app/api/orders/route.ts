@@ -1,4 +1,3 @@
-// app/api/orders/route.ts
 import { NextResponse } from "next/server";
 import { db } from "@/lib/firebase";
 import { collection, addDoc, serverTimestamp, getDocs, query, orderBy } from "firebase/firestore";
@@ -22,24 +21,18 @@ export async function POST(request: Request) {
     const invoiceNumber = body.invoice || `INV-CADANGAN-${Date.now()}`;
 
     // 3. Simpan ke Koleksi 'orders' di Firestore
-    const docRef = await addDoc(collection(db, "orders"), {
+    // MENGGUNAKAN SPREAD OPERATOR (...body)
+    // Semua data dari frontend (termasuk serviceDetails, origin, destination, dll) 
+    // akan otomatis masuk ke database tanpa perlu diketik satu per satu!
+    const newOrder = {
+      ...body,
       invoice: invoiceNumber,
-      customerName: body.customerName,
-      customerPhone: body.customerPhone,
-      customerAddress: body.customerAddress || "-", // <-- ALAMAT DISIMPAN KE DATABASE!
-      category: body.category,
-      serviceName: body.serviceName,
-      unit: body.unit,
-      quantity: body.quantity,
-      basePrice: body.basePrice,
-      urgentFee: body.urgentFee || 0,
-      totalPrice: body.totalPrice,
-      commissionTier: body.commissionTier,
-      driverCode: body.driverCode || null, // Null jika belum ditugaskan
-      paymentMethod: body.paymentMethod,
-      status: "pending", // Status awal: pending, active, completed, cancelled
+      customerAddress: body.customerAddress || "-", 
+      status: body.status || "pending", 
       createdAt: serverTimestamp(),
-    });
+    };
+
+    const docRef = await addDoc(collection(db, "orders"), newOrder);
 
     return NextResponse.json({ 
       success: true, 
