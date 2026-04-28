@@ -20,14 +20,16 @@ export default function DriverDashboard() {
   const [driverVehicle, setDriverVehicle] = useState<string>("");
   const [driverPhone, setDriverPhone] = useState<string>("");
   const [driverProfileUrl, setDriverProfileUrl] = useState<string>(""); 
+  
+  // STATE KEUANGAN YANG SUDAH DISTANDARDISASI
   const [completedCount, setCompletedCount] = useState(0);
-  const [dailyRevenue, setDailyRevenue] = useState(0);
+  const [dailyRevenue, setDailyRevenue] = useState(0); // Murni Jasa & Urgent (Bersih)
+  const [totalReimburse, setTotalReimburse] = useState(0); // Murni Uang Talangan
   
   const [isLoadingOrder, setIsLoadingOrder] = useState(false);
   const [driverCode, setDriverCode] = useState<string>("");
   const [refreshProgress, setRefreshProgress] = useState(0); 
 
-  // STATE UNTUK CUACA LIVE API
   const [weatherData, setWeatherData] = useState<{ temp: number, desc: string, code: number } | null>(null);
   const [weatherLoading, setWeatherLoading] = useState(false);
 
@@ -78,9 +80,6 @@ export default function DriverDashboard() {
     }
   };
 
-  // ========================================================
-  // TARIK DATA CUACA SECARA LIVE (OPEN-METEO API)
-  // ========================================================
   useEffect(() => {
     if (!isOnline) {
       setWeatherData(null);
@@ -111,20 +110,48 @@ export default function DriverDashboard() {
       }
     };
 
-    // Ambil GPS Driver. Jika ditolak, pakai default Malang
     if ("geolocation" in navigator) {
        navigator.geolocation.getCurrentPosition(
          (position) => fetchWeather(position.coords.latitude, position.coords.longitude),
-         (error) => {
-           console.warn("Akses lokasi ditolak, memakai cuaca default Malang.");
-           fetchWeather(-7.983908, 112.621391); 
-         },
+         (error) => { fetchWeather(-7.983908, 112.621391); },
          { enableHighAccuracy: false, timeout: 5000, maximumAge: 10000 }
        );
     } else {
        fetchWeather(-7.983908, 112.621391);
     }
   }, [isOnline]);
+
+  // ========================================================
+  // FUNGSI PERHITUNGAN MATEMATIKA YANG SUDAH DISTANDARDISASI
+  // ========================================================
+  const getSubtotalJasa = (order: any) => {
+    const qty = Number(order.quantity) || 1;
+    if (order.basePrice) return Number(order.basePrice) * qty; 
+    const total = Number(order.totalPrice) || 0;
+    const shopping = Number(order.shoppingCost) || 0;
+    const urgent = Number(order.urgentFee) || 0;
+    const calc = total - shopping - urgent;
+    return calc > 0 ? calc : total;
+  };
+
+  const getUnitPrice = (order: any) => {
+    if (order.basePrice) return Number(order.basePrice);
+    const sub = getSubtotalJasa(order);
+    const qty = Number(order.quantity) || 1;
+    return sub / qty;
+  };
+
+  const getDriverNetIncome = (order: any) => {
+    const baseJasa = getSubtotalJasa(order);
+    const tier = order.commissionTier || 'sedang';
+    let driverPct = 0.80; 
+    if (tier === 'ringan') driverPct = 0.70; 
+    if (tier === 'sedang') driverPct = 0.80; 
+    if (tier === 'berat') driverPct = 0.90;  
+    
+    const urgentFee = Number(order.urgentFee) || 0;
+    return (baseJasa * driverPct) + urgentFee;
+  };
 
   const fetchActiveOrders = async () => {
     if (!isOnline || !driverCode) return;
@@ -147,15 +174,29 @@ export default function DriverDashboard() {
           setDriverVehicle(myProfile.vehicle || "-");
           setDriverPhone(myProfile.phone || "-");
           setDriverProfileUrl(myProfile.profileUrl || ""); 
-          setCompletedCount(myProfile.completedOrders || 0);
-          const myIncome = (myProfile.totalRevenue || 0) - (myProfile.ownerCommission || 0);
-          setDailyRevenue(myIncome);
           if (myProfile.preferences) { myPrefs = { ...myPrefs, ...myProfile.preferences }; }
         }
       }
 
       if (resultOrder.success) {
         const allOrders = resultOrder.data;
+        
+        // 1. HITUNG SALDO BERDASARKAN SELURUH DATA ORDER SELESAI (SINGLE SOURCE OF TRUTH)
+        const myCompletedOrders = allOrders.filter((o:any) => o.driverCode === driverCode && o.status === 'completed');
+        
+        let calcNetJasa = 0;
+        let calcTalangan = 0;
+        
+        myCompletedOrders.forEach((o:any) => {
+          calcNetJasa += getDriverNetIncome(o);
+          calcTalangan += (Number(o.shoppingCost) || 0);
+        });
+
+        setDailyRevenue(calcNetJasa);
+        setTotalReimburse(calcTalangan);
+        setCompletedCount(myCompletedOrders.length);
+
+        // 2. AMBIL DATA ORDER YANG SEDANG BERJALAN/RADAR
         const myTargets = allOrders.filter((o:any) => {
           const isActiveForMe = o.status === 'active' && o.driverCode === driverCode;
           const isPendingForMeOrAll = o.status === 'pending' && (o.driverCode === driverCode || !o.driverCode || o.driverCode === "");
@@ -207,6 +248,7 @@ export default function DriverDashboard() {
     return () => { clearInterval(interval); clearInterval(progInterval); };
   }, [isOnline, driverCode]);
 
+
   const handlePhotoChange = (orderId: string, e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
@@ -234,35 +276,6 @@ export default function DriverDashboard() {
     if (!address) return "#";
     if (address.startsWith("http")) return address;
     return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
-  };
-
-  const getSubtotalJasa = (order: any) => {
-    const qty = Number(order.quantity) || 1;
-    if (order.basePrice) return Number(order.basePrice) * qty; 
-    const total = Number(order.totalPrice) || 0;
-    const shopping = Number(order.shoppingCost) || 0;
-    const urgent = Number(order.urgentFee) || 0;
-    const calc = total - shopping - urgent;
-    return calc > 0 ? calc : total;
-  };
-
-  const getUnitPrice = (order: any) => {
-    if (order.basePrice) return Number(order.basePrice);
-    const sub = getSubtotalJasa(order);
-    const qty = Number(order.quantity) || 1;
-    return sub / qty;
-  };
-
-  const getDriverNetIncome = (order: any) => {
-    const baseJasa = getSubtotalJasa(order);
-    const tier = order.commissionTier || 'sedang';
-    let driverPct = 0.80; 
-    if (tier === 'ringan') driverPct = 0.70; 
-    if (tier === 'sedang') driverPct = 0.80; 
-    if (tier === 'berat') driverPct = 0.90;  
-    
-    const urgentFee = Number(order.urgentFee) || 0;
-    return (baseJasa * driverPct) + urgentFee;
   };
 
   const handleGenerateInvoice = async (order: any, sendWa: boolean) => {
@@ -471,7 +484,6 @@ export default function DriverDashboard() {
   return (
     <div className="max-w-[1200px] mx-auto animate-in fade-in duration-500 pb-10">
       
-      {/* TOMBOL SOS DIPERBAIKI POSISINYA (LEBIH TINGGI DI MOBILE) */}
       <button 
         onClick={() => window.open(`https://wa.me/6285746137180?text=${encodeURIComponent(`🚨 *SOS DARURAT* 🚨\n\nNama: ${driverName}\nKode: ${driverCode}\n\nSaya membutuhkan bantuan operasional/darurat segera di lokasi saya saat ini!`)}`, '_blank')}
         className="fixed bottom-24 right-4 md:bottom-10 md:right-10 bg-rose-600 text-white w-14 h-14 rounded-full shadow-[0_0_20px_rgba(225,29,72,0.5)] flex items-center justify-center hover:scale-110 hover:bg-rose-700 transition-all z-[100] group"
@@ -521,28 +533,33 @@ export default function DriverDashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         
         <div className="lg:col-span-4 space-y-6">
+          
+          {/* KARTU PENDAPATAN YANG SUDAH DIPERBAIKI */}
           <div className="bg-slate-900 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[220px]">
             <div className="absolute -top-10 -right-10 w-32 h-32 bg-blue-500/20 rounded-full blur-2xl"></div>
+            
             <div>
-              <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-1.5"><Wallet size={14} /> Saldo Pendapatan</p>
+              <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1.5">
+                <Wallet size={14} /> Saldo Jasa (Bersih)
+              </p>
               <h1 className="text-3xl md:text-4xl font-bold text-white mb-2 tracking-tight">Rp {dailyRevenue.toLocaleString('id-ID')}</h1>
+              
+              {/* INFO TAMBAHAN: UANG TALANGAN */}
+              {totalReimburse > 0 && (
+                <div className="bg-slate-800/80 border border-slate-700 rounded-lg p-3 mt-3 inline-block w-full max-w-[250px]">
+                  <p className="text-[10px] text-rose-400 uppercase tracking-wider mb-1 flex items-center gap-1.5"><ShoppingCart size={12}/> Uang Talangan Belanja</p>
+                  <p className="text-lg font-bold text-rose-100">Rp {totalReimburse.toLocaleString('id-ID')}</p>
+                </div>
+              )}
             </div>
             
-            <div className="flex-1 flex items-end justify-between gap-1 h-12 mt-2 opacity-90 border-b border-slate-700 pb-1">
-              {[40, 70, 45, 90, 65, 80, 100].map((h, i) => (
-                <div key={i} className="w-full bg-gradient-to-t from-blue-600 to-blue-400 rounded-t-sm" style={{height: `${h}%`}}></div>
-              ))}
-            </div>
-            <p className="text-[9px] text-slate-400 mt-1.5 mb-4 flex items-center gap-1"><TrendingUp size={10} className="text-emerald-400"/> Tren Pendapatan 7 Hari Terakhir</p>
-
-            <div className="flex items-center gap-5 border-t border-slate-700/50 pt-4">
+            <div className="flex items-center gap-5 border-t border-slate-700/50 pt-4 mt-4">
               <div><p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider mb-1">Tugas Selesai</p><p className="text-base font-semibold flex items-center gap-1.5"><ShieldCheck size={14} className="text-blue-400"/> {completedCount}</p></div>
               <div className="w-px h-8 bg-slate-700"></div>
               <div><p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider mb-1">Status</p><p className="text-base font-semibold text-emerald-400">Aktif</p></div>
             </div>
           </div>
           
-          {/* INFO CUACA LIVE MENGGUNAKAN API */}
           {isOnline && (
             <div className="bg-sky-50 border border-sky-100 rounded-2xl p-4 flex items-start gap-3 shadow-sm animate-in fade-in slide-in-from-left-4">
               <div className="bg-white p-2.5 rounded-xl shadow-sm flex items-center justify-center min-w-[44px] min-h-[44px]">

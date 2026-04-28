@@ -3,12 +3,13 @@ import { useState, useEffect } from "react";
 import { 
   ClipboardList, Calendar, MapPin, 
   CheckCircle2, XCircle, Search, RefreshCw,
-  FileDown, Trash2, Filter
+  FileDown, Trash2, Filter, Wallet, ShieldCheck, Map, ArrowRight,
+  ShoppingCart
 } from "lucide-react";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import { db } from "@/lib/firebase";
-import { doc, getDoc, deleteDoc } from "firebase/firestore";
+import { doc, getDoc, updateDoc } from "firebase/firestore";
 
 export default function DriverHistoryPage() {
   const [driverCode, setDriverCode] = useState<string>("");
@@ -22,6 +23,7 @@ export default function DriverHistoryPage() {
 
   const [searchTerm, setSearchTerm] = useState("");
   const [filterDate, setFilterDate] = useState("");
+  const [quickFilter, setQuickFilter] = useState("Semua"); 
 
   useEffect(() => {
     const session = localStorage.getItem("mtm_user");
@@ -55,19 +57,23 @@ export default function DriverHistoryPage() {
 
   useEffect(() => { fetchHistory(); }, [driverCode]);
 
+  // FUNGSI PENGAMAN WAKTU AGAR TIDAK CRASH
+  const formatTimeSafe = (dateString: any) => {
+    if (!dateString) return "--:--";
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return "--:--";
+    return new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit' }).format(date);
+  };
+
   const formatDateTime = (dateString: any) => {
     if (!dateString) return "Data Lama";
     const date = new Date(dateString);
     if (isNaN(date.getTime())) return "Data Lama";
-    
     return new Intl.DateTimeFormat('id-ID', {
       day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
     }).format(date);
   };
 
-  // ========================================================
-  // HELPER MATEMATIKA (SINKRON DENGAN ADMIN)
-  // ========================================================
   const getSubtotalJasa = (order: any) => {
     const qty = Number(order.quantity) || 1;
     if (order.basePrice) {
@@ -88,16 +94,26 @@ export default function DriverHistoryPage() {
   };
 
   const calculateDriverIncome = (order: any) => {
-    const baseJasa = getSubtotalJasa(order); // Dihitung berdasarkan Harga x QTY
+    const baseJasa = getSubtotalJasa(order);
     const tier = order.commissionTier || 'sedang';
     let driverPct = 0.80; 
     if (tier === 'ringan') driverPct = 0.70; 
     if (tier === 'sedang') driverPct = 0.80; 
     if (tier === 'berat') driverPct = 0.90;  
-    return (baseJasa * driverPct) + (Number(order.shoppingCost) || 0) + (Number(order.urgentFee) || 0);
+    return (baseJasa * driverPct) + (Number(order.urgentFee) || 0); 
   };
 
+  // ========================================================
+  // KALKULASI SALDO KESELURUHAN (TIDAK TERPENGARUH FILTER)
+  // ========================================================
+  const myCompletedOrders = orders.filter(o => o.status === 'completed');
+  const totalHistoricalIncome = myCompletedOrders.reduce((sum, order) => sum + calculateDriverIncome(order), 0);
+  const totalHistoricalReimburse = myCompletedOrders.reduce((sum, order) => sum + (Number(order.shoppingCost) || 0), 0);
+  const totalHistoricalJobs = myCompletedOrders.length;
+
   const filteredHistory = orders.filter(order => {
+    if (order.hiddenByDriver) return false;
+
     const isHistoryStatus = order.status === "completed" || order.status === "cancelled";
     const matchSearch = order.invoice?.toLowerCase().includes(searchTerm.toLowerCase()) || 
                         order.serviceName?.toLowerCase().includes(searchTerm.toLowerCase());
@@ -112,24 +128,42 @@ export default function DriverHistoryPage() {
         } else { matchDate = false; }
       } else { matchDate = false; }
     }
-    return isHistoryStatus && matchSearch && matchDate;
+
+    let matchQuick = true;
+    if (quickFilter === "Selesai") matchQuick = order.status === "completed";
+    if (quickFilter === "Batal") matchQuick = order.status === "cancelled";
+
+    return isHistoryStatus && matchSearch && matchDate && matchQuick;
   });
+
+  const groupedHistory = filteredHistory.reduce((acc, order) => {
+    const dateStr = order.createdAt && !isNaN(new Date(order.createdAt).getTime()) 
+      ? new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(order.createdAt))
+      : "Data Terdahulu";
+    
+    if (!acc[dateStr]) acc[dateStr] = [];
+    acc[dateStr].push(order);
+    return acc;
+  }, {} as Record<string, any[]>);
 
   const handleResetHistory = async () => {
     if (filteredHistory.length === 0) return;
-    if (confirm("Hapus permanen semua riwayat yang tampil saat ini?")) {
+    if (confirm("Sembunyikan daftar riwayat ini dari HP Anda?\n\n(Tenang, ini tidak akan menghapus data di sistem pusat Admin)")) {
       setIsDeleting(true);
       try {
-        for (const order of filteredHistory) { await deleteDoc(doc(db, "orders", order.id)); }
-        alert("Riwayat berhasil dibersihkan!");
+        for (const order of filteredHistory) { 
+          await updateDoc(doc(db, "orders", order.id), { hiddenByDriver: true }); 
+        }
+        alert("Riwayat berhasil dibersihkan dari layar Anda!");
         fetchHistory();
-      } catch (error) { alert("Gagal menghapus."); } finally { setIsDeleting(false); }
+      } catch (error) { 
+        alert("Gagal menyembunyikan riwayat."); 
+      } finally { 
+        setIsDeleting(false); 
+      }
     }
   };
 
-  // ========================================================
-  // FUNGSI CETAK PDF YANG SINKRON DENGAN PENGATURAN (MULTI-BANK, TANDA TANGAN)
-  // ========================================================
   const handleGenerateInvoice = async (order: any) => {
     if (!settings) return alert("Menunggu pengaturan, silakan coba lagi...");
     setIsGeneratingPDF(order.id);
@@ -271,9 +305,8 @@ export default function DriverHistoryPage() {
 
       document.body.appendChild(invoiceElement);
       const canvas = await html2canvas(invoiceElement, { scale: 2, useCORS: true });
-      const imgData = canvas.toDataURL('image/jpeg', 1.0);
       const pdf = new jsPDF('p', 'mm', 'a4');
-      pdf.addImage(imgData, 'JPEG', 0, 0, pdf.internal.pageSize.getWidth(), (canvas.height * pdf.internal.pageSize.getWidth()) / canvas.width);
+      pdf.addImage(canvas.toDataURL('image/jpeg', 1.0), 'JPEG', 0, 0, pdf.internal.pageSize.getWidth(), (canvas.height * pdf.internal.pageSize.getWidth()) / canvas.width);
       document.body.removeChild(invoiceElement);
       pdf.save(`Struk_${order.invoice}.pdf`);
 
@@ -287,71 +320,150 @@ export default function DriverHistoryPage() {
           <h2 className="text-xl md:text-2xl font-bold text-slate-800 tracking-tight flex items-center gap-2 mt-2">
             <ClipboardList className="text-blue-600" size={24} /> Riwayat Pesanan
           </h2>
-          <p className="text-xs md:text-sm text-slate-500 font-medium mt-1">Catatan rincian tugas dan pendapatan yang diselesaikan.</p>
+          <p className="text-xs md:text-sm text-slate-500 font-medium mt-1">Pantau rincian tugas dan pendapatan historis Anda.</p>
         </div>
         <div className="flex items-center gap-2 w-full md:w-auto">
           <button onClick={fetchHistory} disabled={isLoading || isDeleting} className="flex-1 md:flex-none p-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-blue-600 rounded-xl shadow-sm transition-all active:scale-95 flex justify-center items-center gap-2 text-xs font-bold">
             <RefreshCw size={16} className={isLoading ? "animate-spin" : ""} /> Refresh
           </button>
-          <button onClick={handleResetHistory} disabled={isLoading || isDeleting || filteredHistory.length === 0} className="flex-1 md:flex-none p-2.5 bg-rose-50 border border-rose-200 hover:bg-rose-100 text-rose-600 rounded-xl shadow-sm transition-all active:scale-95 flex justify-center items-center gap-2 text-xs font-bold">
-            <Trash2 size={16} /> Reset
-          </button>
         </div>
       </div>
 
-      <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-3 mb-6">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-          <input type="text" placeholder="Cari ID Invoice..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:bg-white transition-all text-sm font-medium" />
+      {/* KARTU STATISTIK KESELURUHAN */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        <div className="bg-gradient-to-br from-blue-600 to-blue-500 rounded-2xl p-4 md:p-5 text-white shadow-md relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-24 h-24 bg-white/10 rounded-full blur-2xl -translate-y-1/2 translate-x-1/3"></div>
+          <p className="text-[10px] md:text-xs font-semibold text-blue-100 uppercase tracking-widest mb-1 md:mb-2 flex items-center gap-1.5"><Wallet size={14} /> Total Saldo Jasa (Bersih)</p>
+          <h3 className="text-xl md:text-3xl font-black">Rp {totalHistoricalIncome.toLocaleString('id-ID')}</h3>
+          
+          {/* UANG TALANGAN */}
+          {totalHistoricalReimburse > 0 && (
+            <div className="bg-slate-800/40 border border-slate-700/50 rounded-lg p-2.5 mt-3 inline-block w-full max-w-[250px]">
+              <p className="text-[9px] md:text-[10px] text-rose-300 uppercase tracking-wider mb-0.5 flex items-center gap-1.5"><ShoppingCart size={12}/> Total Uang Talangan</p>
+              <p className="text-sm md:text-base font-bold text-rose-100">Rp {totalHistoricalReimburse.toLocaleString('id-ID')}</p>
+            </div>
+          )}
         </div>
-        <div className="relative w-full md:w-48 shrink-0">
-          <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-          <input type="date" value={filterDate} onChange={(e) => setFilterDate(e.target.value)} className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:bg-white transition-all text-sm font-medium cursor-pointer" />
+
+        <div className="bg-white border border-slate-200 rounded-2xl p-4 md:p-5 shadow-sm flex flex-col justify-center">
+          <p className="text-[10px] md:text-xs font-semibold text-slate-400 uppercase tracking-widest mb-1 md:mb-2 flex items-center gap-1.5"><ShieldCheck size={14} className="text-emerald-500"/> Total Tugas Selesai</p>
+          <h3 className="text-xl md:text-3xl font-black text-slate-800">{totalHistoricalJobs} <span className="text-sm md:text-lg font-bold text-slate-400">Order</span></h3>
+        </div>
+      </div>
+
+      <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm mb-6">
+        <div className="flex bg-slate-100 p-1 rounded-xl mb-3">
+          {['Semua', 'Selesai', 'Batal'].map((tab) => (
+            <button 
+              key={tab} 
+              onClick={() => setQuickFilter(tab)}
+              className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${quickFilter === tab ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex flex-col md:flex-row gap-3">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+            <input type="text" placeholder="Cari ID / Nama Jasa..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:bg-white transition-all text-sm font-medium" />
+          </div>
+          <div className="relative w-full md:w-40 shrink-0">
+            <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+            <input type="date" value={filterDate} onChange={(e) => setFilterDate(e.target.value)} className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:bg-white transition-all text-sm font-medium cursor-pointer" />
+          </div>
+          <button 
+            onClick={handleResetHistory} 
+            disabled={isLoading || isDeleting || filteredHistory.length === 0} 
+            className="w-full md:w-auto p-2.5 px-4 bg-rose-50 border border-rose-200 hover:bg-rose-100 text-rose-600 rounded-xl shadow-sm transition-all active:scale-95 flex justify-center items-center gap-2 text-xs font-bold disabled:opacity-50"
+          >
+            <Trash2 size={16} /> Bersihkan Riwayat
+          </button>
         </div>
       </div>
 
       {isLoading || isDeleting ? (
         <div className="py-16 flex flex-col items-center justify-center text-center">
           <RefreshCw size={36} className="text-blue-500 animate-spin mb-3" />
-          <p className="text-sm font-semibold text-slate-500">Menyinkronkan Riwayat...</p>
+          <p className="text-sm font-semibold text-slate-500">Memuat Riwayat...</p>
         </div>
       ) : filteredHistory.length === 0 ? (
         <div className="py-16 flex flex-col items-center justify-center text-center opacity-70 bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200">
           <ClipboardList size={48} className="text-slate-300 mb-4" />
           <h4 className="font-bold text-slate-600 mb-1">Tidak Ada Data</h4>
-          <p className="text-xs text-slate-500 max-w-[250px]">Atur ulang filter atau cari ID lain.</p>
+          <p className="text-xs text-slate-500 max-w-[250px]">Riwayat kosong atau sudah dibersihkan dari layar ini.</p>
         </div>
       ) : (
-        <div className="space-y-4">
-          {filteredHistory.map((order) => (
-            <div key={order.id} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:border-blue-300 transition-colors relative overflow-hidden group">
-              <div className={`absolute top-0 bottom-0 left-0 w-1.5 ${order.status === 'completed' ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
-              <div className="flex justify-between items-start mb-3 pl-2">
-                <div className="flex flex-col md:flex-row md:items-center gap-1.5 md:gap-3">
-                  <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded uppercase">{order.invoice}</span>
-                  <span className="text-[10px] md:text-xs font-semibold text-slate-500 flex items-center gap-1"><Calendar size={12}/> {formatDateTime(order.createdAt)}</span>
-                </div>
-                <span className={`text-[9px] font-bold px-2 py-0.5 rounded border ${order.status === 'completed' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-rose-50 text-rose-600 border-rose-100'}`}>{order.status === 'completed' ? 'SELESAI' : 'BATAL'}</span>
-              </div>
-              <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-3 mb-4 pl-2">
-                <div>
-                  <h3 className="font-bold text-slate-800 text-sm md:text-base leading-snug">{order.serviceName}</h3>
-                  <p className="text-[10px] font-semibold text-slate-400 mt-1 uppercase">{order.category}</p>
-                </div>
-                <div className="bg-slate-50 p-2 rounded-lg border border-slate-100 md:text-right min-w-[140px]">
-                  <span className="text-[9px] font-semibold text-slate-400 block mb-0.5 uppercase tracking-wider">Net Income</span>
-                  <span className={`font-bold text-base md:text-lg ${order.status === 'completed' ? 'text-emerald-600' : 'text-slate-300 line-through'}`}>Rp {calculateDriverIncome(order).toLocaleString('id-ID')}</span>
-                </div>
-              </div>
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-3 border-t border-slate-100 pl-2">
-                <p className="text-[11px] font-medium text-slate-500 flex items-center gap-1.5 line-clamp-1 flex-1">
-                  <MapPin size={12} className="text-blue-500 shrink-0" /> {order.origin || 'Selesai dikerjakan'} {order.destination && <><span className="text-slate-300">➔</span> {order.destination}</>}
-                </p>
-                {order.status === 'completed' && (
-                  <button onClick={() => handleGenerateInvoice(order)} disabled={isGeneratingPDF === order.id} className="flex items-center justify-center gap-1.5 px-4 py-2 bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-100 text-xs font-bold rounded-lg transition-all active:scale-95">
-                    {isGeneratingPDF === order.id ? <RefreshCw size={14} className="animate-spin" /> : <FileDown size={14} />} Struk
-                  </button>
-                )}
+        <div className="space-y-8">
+          {Object.keys(groupedHistory).map((dateGroup, i) => (
+            <div key={i} className="animate-in fade-in slide-in-from-bottom-4">
+              <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3 ml-2 flex items-center gap-2">
+                <Calendar size={14} /> {dateGroup}
+              </h3>
+              
+              <div className="space-y-4 relative before:absolute before:inset-0 before:ml-5 before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-200 before:to-transparent">
+                {groupedHistory[dateGroup].map((order: any) => (
+                  <div key={order.id} className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active">
+                    
+                    <div className="flex items-center justify-center w-10 h-10 rounded-full border-4 border-slate-50 bg-white shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10 absolute left-0 md:left-1/2 md:static">
+                      {order.status === 'completed' ? <CheckCircle2 size={18} className="text-emerald-500"/> : <XCircle size={18} className="text-rose-500"/>}
+                    </div>
+                    
+                    <div className="w-[calc(100%-3rem)] md:w-[calc(50%-2.5rem)] ml-auto md:ml-0 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md hover:border-blue-300 transition-all">
+                      <div className="flex justify-between items-start mb-3 border-b border-slate-100 pb-3">
+                        <div className="flex flex-col gap-1.5">
+                          <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded uppercase w-max">{order.invoice}</span>
+                          <span className="text-[10px] font-semibold text-slate-400">{formatTimeSafe(order.createdAt)}</span>
+                        </div>
+                        <span className={`text-[9px] font-bold px-2 py-0.5 rounded border ${order.status === 'completed' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-rose-50 text-rose-600 border-rose-100'}`}>
+                          {order.status === 'completed' ? 'SELESAI' : 'BATAL'}
+                        </span>
+                      </div>
+                      
+                      <div className="mb-4">
+                        <h3 className="font-bold text-slate-800 text-sm leading-snug">{order.serviceName}</h3>
+                        <p className="text-[10px] font-semibold text-slate-400 mt-1 uppercase">{order.category}</p>
+                      </div>
+
+                      {(order.origin || order.destination || order.customerAddress) && (
+                        <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 mb-4 space-y-2 relative">
+                          {order.origin && (
+                            <div className="flex gap-2">
+                              <MapPin size={14} className="text-blue-500 shrink-0 mt-0.5" />
+                              <p className="text-[10px] font-medium text-slate-600 line-clamp-1">{order.origin}</p>
+                            </div>
+                          )}
+                          {order.destination && (
+                            <div className="flex gap-2">
+                              {order.origin && <div className="absolute left-[16px] top-6 bottom-5 w-px border-l-2 border-dashed border-slate-300"></div>}
+                              <Map size={14} className="text-rose-500 shrink-0 mt-0.5" />
+                              <p className="text-[10px] font-medium text-slate-600 line-clamp-1">{order.destination}</p>
+                            </div>
+                          )}
+                          {(!order.origin && !order.destination) && order.customerAddress && (
+                            <div className="flex gap-2">
+                              <MapPin size={14} className="text-slate-400 shrink-0 mt-0.5" />
+                              <p className="text-[10px] font-medium text-slate-600 line-clamp-1">{order.customerAddress}</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      
+                      <div className="flex items-center justify-between pt-1">
+                        <div>
+                          <span className="text-[9px] font-semibold text-slate-400 block mb-0.5 uppercase tracking-wider">Pendapatan Bersih</span>
+                          <span className={`font-bold text-lg ${order.status === 'completed' ? 'text-emerald-600' : 'text-slate-300 line-through'}`}>Rp {calculateDriverIncome(order).toLocaleString('id-ID')}</span>
+                        </div>
+                        {order.status === 'completed' && (
+                          <button onClick={() => handleGenerateInvoice(order)} disabled={isGeneratingPDF === order.id} className="p-2 bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-100 rounded-lg transition-all active:scale-95" title="Lihat Struk">
+                            {isGeneratingPDF === order.id ? <RefreshCw size={18} className="animate-spin" /> : <FileDown size={18} />} 
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           ))}
