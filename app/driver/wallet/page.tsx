@@ -6,9 +6,15 @@ import {
   Banknote, Info, RefreshCw, X, UploadCloud, Camera, ShoppingCart, Calendar, ChevronRight
 } from "lucide-react";
 import { db } from "@/lib/firebase";
-import { collection, addDoc, query, where, getDocs } from "firebase/firestore";
+import { collection, addDoc, query, where, getDocs, doc, getDoc } from "firebase/firestore";
+
+// HELPER UNTUK MENCEGAH PEMBULATAN (MENAMPILKAN DESIMAL JIKA ADA)
+const formatCurrency = (amount: number) => {
+  return Number(amount).toLocaleString('id-ID', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+};
 
 export default function DriverWalletPage() {
+  const [isLoaded, setIsLoaded] = useState(false);
   const [driverCode, setDriverCode] = useState<string>("");
   const [driverName, setDriverName] = useState<string>("");
   const [isLoading, setIsLoading] = useState(true);
@@ -18,26 +24,25 @@ export default function DriverWalletPage() {
   const [digitalBalance, setDigitalBalance] = useState(0); 
   const [cashHakBersih, setCashHakBersih] = useState(0);   
   const [pendingReimburse, setPendingReimburse] = useState(0); 
-  const [totalWithdrawn, setTotalWithdrawn] = useState(0); // NEW: Total pencairan sukses
+  const [totalWithdrawn, setTotalWithdrawn] = useState(0); 
   const [transactions, setTransactions] = useState<any[]>([]);
+  const [settings, setSettings] = useState<any>(null);
 
-  // STATE INFO BANK
   const [bankForm, setBankForm] = useState({
     bankName: "", accountNumber: "", accountName: ""
   });
 
-  // STATE MODAL TARIK SALDO (INCOME)
   const [isWithdrawModalOpen, setIsWithdrawModalOpen] = useState(false);
   const [withdrawAmount, setWithdrawAmount] = useState<string>("");
   const [isWithdrawing, setIsWithdrawing] = useState(false);
 
-  // STATE MODAL KLAIM REIMBURSE (TALANGAN)
   const [isReimburseModalOpen, setIsReimburseModalOpen] = useState(false);
   const [selectedReimburse, setSelectedReimburse] = useState<any>(null);
   const [proofFile, setProofFile] = useState<File | null>(null);
   const [proofPreview, setProofPreview] = useState<string | null>(null);
 
   useEffect(() => {
+    setIsLoaded(true);
     const session = localStorage.getItem("mtm_user");
     if (session) {
       setDriverCode(session);
@@ -56,9 +61,6 @@ export default function DriverWalletPage() {
     }
   };
 
-  // ========================================================
-  // FUNGSI PERHITUNGAN MATEMATIKA YANG SUDAH DISTANDARDISASI
-  // ========================================================
   const getSubtotalJasa = (order: any) => {
     const qty = Number(order.quantity) || 1;
     if (order.basePrice) return Number(order.basePrice) * qty; 
@@ -69,24 +71,41 @@ export default function DriverWalletPage() {
     return calc > 0 ? calc : total;
   };
 
-  const getDriverNetIncome = (order: any) => {
-    const baseJasa = getSubtotalJasa(order);
-    const tier = order.commissionTier || 'sedang';
-    let driverPct = 0.80; 
-    if (tier === 'ringan') driverPct = 0.70; 
-    if (tier === 'sedang') driverPct = 0.80; 
-    if (tier === 'berat') driverPct = 0.90;  
+  const getOwnerCommission = (order: any, appSettings: any) => {
+    if (order.exactOwnerCommission !== undefined) return order.exactOwnerCommission;
+    const base = getSubtotalJasa(order); 
+    const tier = order.commissionTier?.toLowerCase() || 'sedang';
     
-    const urgentFee = Number(order.urgentFee) || 0;
-    return (baseJasa * driverPct) + urgentFee;
+    let pct = 0.15; 
+    if (appSettings && appSettings.commissions && appSettings.commissions[tier] !== undefined) {
+       pct = Number(appSettings.commissions[tier]) / 100;
+    } else {
+       if (tier === 'ringan') pct = 0.16;
+       else if (tier === 'sedang') pct = 0.15;
+       else if (tier === 'berat') pct = 0.13;
+    }
+    return base * pct;
   };
 
-  // FUNGSI TARIK DATA DOMPET
+  const getDriverNetIncome = (order: any, appSettings: any) => {
+    const baseJasa = getSubtotalJasa(order);
+    const ownerComm = getOwnerCommission(order, appSettings);
+    const urgentFee = Number(order.urgentFee) || 0;
+    return (baseJasa - ownerComm) + urgentFee;
+  };
+
   const fetchWalletData = async () => {
     if (!driverCode) return;
     setIsLoading(true);
 
     try {
+      const snapSettings = await getDoc(doc(db, "settings", "global"));
+      let currentSettings = null;
+      if (snapSettings.exists()) {
+        currentSettings = snapSettings.data();
+        setSettings(currentSettings);
+      }
+
       const resProfile = await fetch("/api/drivers");
       const profileData = await resProfile.json();
       if (profileData.success) {
@@ -116,7 +135,7 @@ export default function DriverWalletPage() {
             id: doc.id,
             isWithdrawal: true,
             title: "Penarikan Saldo Pendapatan",
-            amount: `- Rp ${(Number(data.amount) || 0).toLocaleString('id-ID')}`,
+            amount: `- Rp ${formatCurrency(Number(data.amount) || 0)}`,
             dateGroup,
             time: timeStr,
             status: data.status === "completed" ? "success" : "pending",
@@ -138,7 +157,7 @@ export default function DriverWalletPage() {
         const completedOrders = result.data.filter((o: any) => o.status === "completed");
 
         completedOrders.forEach((o: any) => {
-          const driverNetIncome = getDriverNetIncome(o);
+          const driverNetIncome = getDriverNetIncome(o, currentSettings);
           const talangan = Number(o.shoppingCost) || 0;
           
           const method = o.paymentMethod?.toLowerCase() || 'cash';
@@ -166,7 +185,7 @@ export default function DriverWalletPage() {
             isWithdrawal: false,
             invoice: o.invoice,
             title: o.serviceName,
-            amount: `${isDigital ? '+' : ''} Rp ${driverNetIncome.toLocaleString('id-ID')}`,
+            amount: `${isDigital ? '+' : ''} Rp ${formatCurrency(driverNetIncome)}`,
             dateGroup,
             time: timeStr,
             status: "success",
@@ -197,14 +216,12 @@ export default function DriverWalletPage() {
 
   useEffect(() => { fetchWalletData(); }, [driverCode]);
 
-  // KELOMPOKKAN TRANSAKSI BERDASARKAN TANGGAL
   const groupedTransactions = transactions.reduce((acc, trx) => {
     if (!acc[trx.dateGroup]) acc[trx.dateGroup] = [];
     acc[trx.dateGroup].push(trx);
     return acc;
   }, {} as Record<string, any[]>);
 
-  // SUBMIT TARIK SALDO PENDAPATAN
   const submitIncomeWithdrawal = async (e: React.FormEvent) => {
     e.preventDefault();
     const wAmount = Number(withdrawAmount);
@@ -240,7 +257,6 @@ export default function DriverWalletPage() {
     }
   };
 
-  // SUBMIT KLAIM REIMBURSE
   const submitReimburse = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedReimburse) return;
@@ -300,6 +316,9 @@ export default function DriverWalletPage() {
     }
   };
 
+  // HYDRATION SAFE RENDER
+  if (!isLoaded) return null;
+
   return (
     <div className="max-w-[800px] mx-auto animate-in fade-in duration-500 pb-24 px-2 md:px-0">
       
@@ -348,7 +367,7 @@ export default function DriverWalletPage() {
             {totalWithdrawn > 0 && (
               <div className="text-right">
                 <p className="text-[9px] text-slate-400 font-medium uppercase tracking-widest mb-0.5">Total Dicairkan</p>
-                <p className="text-xs font-bold text-emerald-400">Rp {totalWithdrawn.toLocaleString('id-ID')}</p>
+                <p className="text-xs font-bold text-emerald-400">Rp {formatCurrency(totalWithdrawn)}</p>
               </div>
             )}
           </div>
@@ -356,7 +375,7 @@ export default function DriverWalletPage() {
           <div className="mb-8 flex items-end">
             <span className="text-xl text-slate-400 font-medium mr-2 mb-1.5">Rp</span>
             <h1 className="text-4xl md:text-5xl font-black tracking-tight">
-              {isLoading ? "..." : digitalBalance.toLocaleString('id-ID')}
+              {isLoading ? "..." : formatCurrency(digitalBalance)}
             </h1>
           </div>
 
@@ -380,7 +399,7 @@ export default function DriverWalletPage() {
           <Banknote size={48} className="absolute -bottom-3 -right-3 text-emerald-50 opacity-60 group-hover:scale-110 transition-transform duration-500" />
           <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1.5">Tunai (Di Tangan)</p>
           <h4 className="text-xl md:text-2xl font-black text-slate-800 mt-1">
-            Rp {isLoading ? "..." : cashHakBersih.toLocaleString('id-ID')}
+            Rp {isLoading ? "..." : formatCurrency(cashHakBersih)}
           </h4>
           <p className="text-[10px] text-slate-500 font-medium mt-2 bg-slate-50 inline-block px-2 py-1 rounded-md border border-slate-100">
             Pendapatan masuk via Pembayaran Cash.
@@ -391,7 +410,7 @@ export default function DriverWalletPage() {
           <ShoppingCart size={48} className="absolute -bottom-3 -right-3 text-rose-100 opacity-60 group-hover:scale-110 transition-transform duration-500" />
           <p className="text-[10px] md:text-xs font-bold text-rose-500 uppercase tracking-widest mb-1 flex items-center gap-1.5">Piutang Talangan</p>
           <h4 className="text-xl md:text-2xl font-black text-rose-700 mt-1">
-            Rp {isLoading ? "..." : pendingReimburse.toLocaleString('id-ID')}
+            Rp {isLoading ? "..." : formatCurrency(pendingReimburse)}
           </h4>
           <p className="text-[10px] text-rose-600 font-medium mt-2 bg-rose-100/50 inline-block px-2 py-1 rounded-md border border-rose-100">
             Uang pribadi yang mengendap di Owner.
@@ -399,7 +418,7 @@ export default function DriverWalletPage() {
         </div>
       </div>
 
-      {/* TRANSAKSI MUTASI (DIKELOMPOKKAN PER TANGGAL) */}
+      {/* TRANSAKSI MUTASI */}
       <div>
         <h3 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-4 px-1 flex items-center gap-2">
           <History size={16} className="text-blue-500"/> Riwayat Mutasi & Reimburse
@@ -427,7 +446,6 @@ export default function DriverWalletPage() {
                   {groupedTransactions[dateGroup].map((trx: any, tIdx: number) => (
                     <div key={`${trx.id}-${tIdx}`} className="p-4 md:p-5 flex flex-col hover:bg-slate-50/80 transition-colors">
                       
-                      {/* BARIS UTAMA TRANSAKSI */}
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3 md:gap-4">
                           <div className={`w-10 h-10 md:w-12 md:h-12 rounded-xl flex items-center justify-center shrink-0 border ${
@@ -465,12 +483,12 @@ export default function DriverWalletPage() {
                         </div>
                       </div>
 
-                      {/* KOTAK REIMBURSE (HANYA MUNCUL JIKA TRANSAKSI DIGITAL + ADA TALANGAN) */}
+                      {/* KOTAK REIMBURSE */}
                       {!trx.isWithdrawal && trx.isBelanja && trx.isDigital && trx.talangan > 0 && (
                         <div className="mt-4 bg-rose-50/60 border border-rose-100 rounded-xl p-3 md:p-4 flex flex-col md:flex-row md:items-center justify-between gap-3">
                           <div>
                             <p className="text-[10px] font-bold text-rose-500 uppercase tracking-widest flex items-center gap-1.5"><ShoppingCart size={12} /> Talangan Anda Terpakai</p>
-                            <p className="text-base font-black text-rose-700 mt-0.5">Rp {trx.talangan.toLocaleString('id-ID')}</p>
+                            <p className="text-base font-black text-rose-700 mt-0.5">Rp {formatCurrency(trx.talangan)}</p>
                           </div>
                           <div>
                             {trx.reimburseStatus === 'none' && (
@@ -495,11 +513,10 @@ export default function DriverWalletPage() {
                         </div>
                       )}
 
-                      {/* INFO UNTUK TRANSAKSI CASH */}
                       {!trx.isWithdrawal && trx.isBelanja && !trx.isDigital && trx.talangan > 0 && (
                         <div className="mt-3 bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-[10px] text-slate-500 font-medium flex items-start gap-2">
                           <Info size={14} className="text-amber-500 shrink-0 mt-0.5" />
-                          <p>Uang talangan sebesar <strong className="text-slate-700">Rp {trx.talangan.toLocaleString('id-ID')}</strong> sudah Anda terima langsung (Tunai/Cash) dari pelanggan.</p>
+                          <p>Uang talangan sebesar <strong className="text-slate-700">Rp {formatCurrency(trx.talangan)}</strong> sudah Anda terima langsung (Tunai/Cash) dari pelanggan.</p>
                         </div>
                       )}
 
@@ -512,9 +529,7 @@ export default function DriverWalletPage() {
         )}
       </div>
 
-      {/* ======================================================== */}
       {/* MODAL 1: KLAIM REIMBURSE */}
-      {/* ======================================================== */}
       {isReimburseModalOpen && selectedReimburse && (
         <div className="fixed inset-0 z-[200] flex items-end md:items-center justify-center bg-slate-900/60 backdrop-blur-sm sm:p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl w-full max-w-md relative flex flex-col max-h-[90vh] animate-in slide-in-from-bottom-8 sm:slide-in-from-bottom-0 overflow-hidden">
@@ -534,7 +549,7 @@ export default function DriverWalletPage() {
                 
                 <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex justify-between items-center">
                   <span className="text-xs font-bold text-blue-800 uppercase tracking-widest">Hak Diganti</span>
-                  <span className="text-2xl font-black text-blue-700">Rp {selectedReimburse.talangan.toLocaleString('id-ID')}</span>
+                  <span className="text-2xl font-black text-blue-700">Rp {formatCurrency(selectedReimburse.talangan)}</span>
                 </div>
 
                 <div className="space-y-2">
@@ -589,9 +604,7 @@ export default function DriverWalletPage() {
         </div>
       )}
 
-      {/* ======================================================== */}
       {/* MODAL 2: TARIK SALDO JASA */}
-      {/* ======================================================== */}
       {isWithdrawModalOpen && (
         <div className="fixed inset-0 z-[200] flex items-end md:items-center justify-center bg-slate-900/60 backdrop-blur-sm sm:p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl w-full max-w-md relative flex flex-col max-h-[90vh] animate-in slide-in-from-bottom-8 sm:slide-in-from-bottom-0 overflow-hidden">
@@ -599,7 +612,7 @@ export default function DriverWalletPage() {
             <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/80">
               <div>
                 <h3 className="font-bold text-slate-800 text-base flex items-center gap-2"><ArrowDownToLine size={18} className="text-blue-600" /> Form Tarik Saldo</h3>
-                <p className="text-[11px] text-slate-500 font-medium mt-0.5">Tersedia: Rp {digitalBalance.toLocaleString('id-ID')}</p>
+                <p className="text-[11px] text-slate-500 font-medium mt-0.5">Tersedia: Rp {formatCurrency(digitalBalance)}</p>
               </div>
               <button onClick={() => setIsWithdrawModalOpen(false)} className="p-2 bg-white text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-full border border-slate-200 transition-colors">
                 <X size={18} />
@@ -617,7 +630,7 @@ export default function DriverWalletPage() {
                   <div className="flex items-center w-full px-4 py-3.5 bg-white border-2 border-slate-200 rounded-xl focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-50 transition-all shadow-sm">
                     <span className="text-blue-500 font-black mr-3 text-lg border-r border-slate-200 pr-3">Rp</span>
                     <input 
-                      type="number" required max={digitalBalance}
+                      type="number" required max={digitalBalance} step="any"
                       value={withdrawAmount} onChange={(e) => setWithdrawAmount(e.target.value)}
                       placeholder="0" className="flex-1 w-full bg-transparent border-0 outline-none text-slate-800 font-black text-2xl" 
                     />

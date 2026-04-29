@@ -3,52 +3,117 @@ import { useState, useEffect } from "react";
 import { 
   Package, Users, Wallet, TrendingUp, TrendingDown, 
   Clock, RefreshCw, CheckCircle2, ArrowRight, CalendarDays,
-  MapPin, ShieldCheck, ChevronRight
+  MapPin, ShieldCheck, ChevronRight, Download, Landmark, User, Weight
 } from "lucide-react";
 import Link from "next/link";
+import { db } from "@/lib/firebase";
+import { collection, getDocs, addDoc, doc, getDoc } from "firebase/firestore";
+
+// HELPER UNTUK MENCEGAH PEMBULATAN RUPIAH (MENAMPILKAN DESIMAL JIKA ADA)
+const formatCurrency = (amount: number) => {
+  return Number(amount).toLocaleString('id-ID', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+};
 
 export default function AdminDashboard() {
   const [isLoaded, setIsLoaded] = useState(false);
   
-  // STATE UNTUK DATA DINAMIS
   const [orders, setOrders] = useState<any[]>([]);
-  const [todayRevenue, setTodayRevenue] = useState(0); // Omzet = Komisi Owner
+  const [ownerBalance, setOwnerBalance] = useState(0); 
   const [totalDrivers, setTotalDrivers] = useState(0);
+  const [onlineDrivers, setOnlineDrivers] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isWithdrawing, setIsWithdrawing] = useState(false);
   
-  // STATE UNTUK GRAFIK MINGGUAN DINAMIS
+  const [settings, setSettings] = useState<any>(null); 
   const [weeklyTrend, setWeeklyTrend] = useState<any[]>([]);
   const [trendGrowth, setTrendGrowth] = useState({ value: "0%", isPositive: true });
 
-  // FUNGSI HITUNG KOMISI OWNER (Disamakan dengan riwayat pesanan)
-  const getOwnerCommission = (tier: string, total: number) => {
-    if (!total) return 0;
-    if (tier === 'ringan') return total * 0.30; 
-    if (tier === 'sedang') return total * 0.20; 
-    if (tier === 'berat') return total * 0.10;  
-    return total * 0.20; // Default jika kosong
+  // ========================================================
+  // RUMUS REAL TANPA PEMBULATAN (Owner: 16,15,13 | Driver: 84,85,87)
+  // ========================================================
+  const getSubtotalJasa = (order: any) => {
+    const qty = Number(order.quantity) || 1;
+    if (order.basePrice) return Number(order.basePrice) * qty; 
+    const total = Number(order.totalPrice) || 0;
+    const shopping = Number(order.shoppingCost) || 0;
+    const urgent = Number(order.urgentFee) || 0;
+    const calc = total - shopping - urgent;
+    return calc > 0 ? calc : total;
   };
 
-  // FUNGSI TARIK DATA REAL-TIME & KALKULASI PINTAR
+  const getOwnerCommission = (order: any, appSettings: any) => {
+    if (order.exactOwnerCommission !== undefined) return order.exactOwnerCommission;
+    const base = getSubtotalJasa(order); 
+    const tier = order.commissionTier?.toLowerCase() || 'sedang';
+    
+    let pct = 0.15; // Default Sedang 15%
+    
+    if (appSettings && appSettings.commissions && appSettings.commissions[tier] !== undefined) {
+       pct = Number(appSettings.commissions[tier]) / 100;
+    } else {
+       if (tier === 'ringan') pct = 0.16;      // Owner 16%
+       else if (tier === 'sedang') pct = 0.15; // Owner 15%
+       else if (tier === 'berat') pct = 0.13;  // Owner 13%
+    }
+    
+    return base * pct;
+  };
+
+  const getDriverProfit = (order: any, appSettings: any) => {
+    const base = getSubtotalJasa(order);
+    const ownerComm = getOwnerCommission(order, appSettings);
+    const urgent = Number(order.urgentFee) || 0;
+    // Driver otomatis mendapatkan sisanya (100% - Komisi Owner) yaitu 84%, 85%, atau 87% + Uang Urgent
+    return (base - ownerComm) + urgent;
+  };
+
+  const getTotalTagihan = (order: any) => {
+    const base = getSubtotalJasa(order);
+    const shopping = Number(order.shoppingCost) || 0;
+    const urgent = Number(order.urgentFee) || 0;
+    return base + shopping + urgent;
+  };
+
+  // ========================================================
+  // TARIK DATA REAL-TIME & KALKULASI PINTAR
+  // ========================================================
   const fetchDashboardData = async () => {
     setIsRefreshing(true);
     try {
+      const snapSettings = await getDoc(doc(db, "settings", "global"));
+      let currentSettings = null;
+      if (snapSettings.exists()) {
+        currentSettings = snapSettings.data();
+        setSettings(currentSettings);
+      }
+
       const resOrders = await fetch("/api/orders");
       const resultOrders = await resOrders.json();
+      
+      const resDrivers = await fetch("/api/drivers");
+      const resultDrivers = await resDrivers.json();
+
+      const snapWithdraw = await getDocs(collection(db, "withdrawals"));
+      let totalOwnerWithdrawn = 0;
+      snapWithdraw.forEach(document => {
+        const d = document.data();
+        if (d.type === 'owner_withdraw') {
+          totalOwnerWithdrawn += (Number(d.amount) || 0);
+        }
+      });
       
       if (resultOrders.success) {
         const allOrders = resultOrders.data;
         setOrders(allOrders);
 
-        const today = new Date();
-        today.setHours(0, 0, 0, 0); 
-
+        let totalAllTimeOwnerComm = 0;
         let tempTrend = [];
         let thisWeekTotal = 0;
         let lastWeekTotal = 0;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0); 
         const msPerDay = 1000 * 60 * 60 * 24;
         
-        // 1. Buat struktur 7 hari ke belakang
         for (let i = 6; i >= 0; i--) {
           const d = new Date(today);
           d.setDate(today.getDate() - i);
@@ -61,33 +126,33 @@ export default function AdminDashboard() {
           });
         }
 
-        // 2. Masukkan data komisi ke dalam array hari yang cocok
         allOrders.forEach((o: any) => {
-          if (o.status === 'completed' && o.createdAt) {
-            const orderDate = new Date(o.createdAt);
-            orderDate.setHours(0, 0, 0, 0);
-            
-            // Hitung KOMISI OWNER (Bukan Total Belanja)
-            const commission = getOwnerCommission(o.commissionTier, o.totalPrice);
+          if (o.status === 'completed') {
+            const commission = getOwnerCommission(o, currentSettings);
+            totalAllTimeOwnerComm += commission;
 
-            const diffDays = Math.round((today.getTime() - orderDate.getTime()) / msPerDay);
+            if (o.createdAt) {
+              const orderDate = new Date(o.createdAt);
+              orderDate.setHours(0, 0, 0, 0);
+              
+              const diffDays = Math.round((today.getTime() - orderDate.getTime()) / msPerDay);
 
-            // Jika pesanan dalam 7 hari terakhir (Minggu Ini)
-            if (diffDays >= 0 && diffDays <= 6) {
-              const targetDay = tempTrend.find(t => t.timestamp === orderDate.getTime());
-              if (targetDay) {
-                targetDay.value += commission;
-                thisWeekTotal += commission;
+              if (diffDays >= 0 && diffDays <= 6) {
+                const targetDay = tempTrend.find(t => t.timestamp === orderDate.getTime());
+                if (targetDay) {
+                  targetDay.value += commission;
+                  thisWeekTotal += commission;
+                }
+              } 
+              else if (diffDays >= 7 && diffDays <= 13) {
+                lastWeekTotal += commission;
               }
-            } 
-            // Jika pesanan antara 7-13 hari yang lalu (Minggu Lalu, untuk perbandingan tren)
-            else if (diffDays >= 7 && diffDays <= 13) {
-              lastWeekTotal += commission;
             }
           }
         });
 
-        // 3. Normalisasi tinggi diagram & tentukan pertumbuhan (%)
+        setOwnerBalance(Math.max(0, totalAllTimeOwnerComm - totalOwnerWithdrawn));
+
         const maxVal = Math.max(...tempTrend.map(t => t.value));
         const finalTrend = tempTrend.map(t => ({
           day: t.day,
@@ -108,16 +173,14 @@ export default function AdminDashboard() {
           value: Math.abs(growthPct).toFixed(1) + "%",
           isPositive: growthPct >= 0
         });
-        
-        // Revenue Hari Ini adalah array terakhir (Hari ke-0 / isToday)
-        setTodayRevenue(finalTrend[6].value);
       }
 
-      // Tarik Jumlah Driver
-      const resDrivers = await fetch("/api/drivers");
-      const resultDrivers = await resDrivers.json();
       if (resultDrivers.success) {
-        setTotalDrivers(resultDrivers.data.length);
+        const driversList = resultDrivers.data;
+        setTotalDrivers(driversList.length);
+        
+        const actives = driversList.filter((d: any) => d.isOnline === true || d.status !== 'suspend');
+        setOnlineDrivers(actives.length);
       }
     } catch (error) {
       console.error("Gagal menarik data dashboard:", error);
@@ -129,16 +192,33 @@ export default function AdminDashboard() {
   useEffect(() => {
     setIsLoaded(true);
     fetchDashboardData(); 
-    
-    // LIVE TRACKER: Update otomatis setiap 15 detik
     const interval = setInterval(fetchDashboardData, 15000);
     return () => clearInterval(interval);
   }, []);
 
-  // KELOMPOKKAN DATA UNTUK PAPAN KANBAN
+  const handleWithdrawOwner = async () => {
+    if (ownerBalance <= 0) return alert("Saldo Kas Owner sudah Rp 0. Belum ada pemasukan baru.");
+    if (confirm(`Apakah Anda yakin ingin menarik/mencairkan Saldo Kas Owner sebesar Rp ${formatCurrency(ownerBalance)}?\n\nSaldo di layar akan di-reset (di-Nol-kan).`)) {
+      setIsWithdrawing(true);
+      try {
+        await addDoc(collection(db, "withdrawals"), {
+          type: "owner_withdraw",
+          amount: ownerBalance,
+          createdAt: new Date().toISOString()
+        });
+        alert("Pencairan Saldo Kas Owner berhasil dicatat!\nSaldo sekarang adalah Rp 0.");
+        fetchDashboardData();
+      } catch (error) {
+        alert("Gagal memproses penarikan.");
+      } finally {
+        setIsWithdrawing(false);
+      }
+    }
+  };
+
   const ordersPending = orders.filter(o => o.status === 'pending');
   const ordersProcessing = orders.filter(o => o.status === 'active');
-  const ordersCompleted = orders.filter(o => o.status === 'completed').slice(0, 10); // Ambil 10 selesai terbaru
+  const ordersCompleted = orders.filter(o => o.status === 'completed').slice(0, 10); 
 
   const formatTime = (dateString: string) => {
     if (!dateString) return "-";
@@ -150,7 +230,7 @@ export default function AdminDashboard() {
   return (
     <div className={`max-w-[1400px] mx-auto pb-20 animate-in fade-in slide-in-from-bottom-8 duration-700 ${isLoaded ? 'opacity-100' : 'opacity-0'}`}>
       
-      {/* HEADER & NOTIFIKASI RESET */}
+      {/* HEADER */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8 pb-6 border-b border-slate-200 mt-2">
         <div>
           <h2 className="text-3xl font-extrabold text-slate-800 tracking-tight">Dashboard Eksekutif</h2>
@@ -168,24 +248,34 @@ export default function AdminDashboard() {
       </div>
 
       {/* ========================================================= */}
-      {/* BAGIAN 1: 3 KARTU STATISTIK (PREMIUM UI) */}
+      {/* BAGIAN 1: 3 KARTU STATISTIK */}
       {/* ========================================================= */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mb-8">
         
-        {/* KARTU OMZET */}
+        {/* KARTU SALDO OWNER */}
         <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-[1.5rem] p-6 shadow-xl relative overflow-hidden group">
           <div className="absolute -right-4 -top-4 w-24 h-24 bg-white/5 rounded-full blur-2xl group-hover:bg-white/10 transition-colors"></div>
-          <div className="flex items-center gap-5 relative z-10">
-            <div className="h-14 w-14 rounded-2xl bg-white/10 text-emerald-400 flex items-center justify-center shrink-0 backdrop-blur-md border border-white/5">
-              <Wallet size={24} strokeWidth={2.5} />
+          
+          <div className="flex justify-between items-start mb-2 relative z-10">
+            <div className="h-12 w-12 rounded-2xl bg-white/10 text-emerald-400 flex items-center justify-center shrink-0 backdrop-blur-md border border-white/5">
+              <Wallet size={20} strokeWidth={2.5} />
             </div>
-            <div className="flex-1">
-              <p className="text-[10px] md:text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-1">Pendapatan Bersih (Hari Ini)</p>
-              <h4 className="text-2xl md:text-3xl font-black text-white tracking-tight">
-                <span className="text-lg text-slate-500 font-bold mr-1">Rp</span>
-                {todayRevenue.toLocaleString('id-ID')}
-              </h4>
-            </div>
+            <button 
+              onClick={handleWithdrawOwner}
+              disabled={isWithdrawing || ownerBalance <= 0}
+              className="text-[10px] font-bold text-white bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors active:scale-95 shadow-md"
+            >
+              {isWithdrawing ? <RefreshCw size={12} className="animate-spin"/> : <Download size={12} />} 
+              {isWithdrawing ? "Memproses..." : "Tarik & Reset"}
+            </button>
+          </div>
+
+          <div className="relative z-10">
+            <p className="text-[10px] md:text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-1">Saldo Kas Owner</p>
+            <h4 className="text-2xl md:text-3xl font-black text-white tracking-tight">
+              <span className="text-lg text-slate-500 font-bold mr-1">Rp</span>
+              {formatCurrency(ownerBalance)}
+            </h4>
           </div>
         </div>
 
@@ -199,7 +289,7 @@ export default function AdminDashboard() {
             <div className="flex items-center gap-3">
               <h4 className="text-2xl md:text-3xl font-black text-slate-800 tracking-tight">{ordersPending.length}</h4>
               {ordersPending.length > 0 && (
-                <span className="text-[10px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-lg border border-rose-100 animate-pulse">Action Required</span>
+                <span className="text-[10px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-lg border border-rose-100 animate-pulse">Butuh Driver</span>
               )}
             </div>
           </div>
@@ -215,7 +305,7 @@ export default function AdminDashboard() {
             <p className="text-[10px] md:text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-1">Total Armada Terdaftar</p>
             <div className="flex items-baseline gap-2">
               <h4 className="text-2xl md:text-3xl font-black text-slate-800 tracking-tight">{totalDrivers}</h4>
-              <span className="text-xs font-bold text-slate-400 mb-0.5">Mitra Aktif</span>
+              <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100 mb-0.5">{onlineDrivers} Aktif</span>
             </div>
           </div>
         </div>
@@ -229,9 +319,9 @@ export default function AdminDashboard() {
         
         <div className="w-full md:w-1/3 relative z-10 text-center md:text-left border-b md:border-b-0 md:border-r border-slate-100 pb-6 md:pb-0 md:pr-8">
           <h3 className="text-lg md:text-xl font-black text-slate-800 tracking-tight flex items-center justify-center md:justify-start gap-2">
-            <TrendingUp className="text-emerald-500" size={20} /> Tren Pendapatan
+            <TrendingUp className="text-emerald-500" size={20} /> Tren Profit Owner
           </h3>
-          <p className="text-xs md:text-sm font-medium text-slate-500 mt-2 mb-6">Perbandingan komisi bersih yang didapatkan selama 7 hari terakhir.</p>
+          <p className="text-xs md:text-sm font-medium text-slate-500 mt-2 mb-6">Perbandingan profit bersih yang didapatkan selama 7 hari terakhir.</p>
           <div className="flex items-end justify-center md:justify-start gap-3">
             <h4 className={`text-3xl md:text-5xl font-black tracking-tighter ${trendGrowth.isPositive ? 'text-emerald-500' : 'text-rose-500'}`}>
               {trendGrowth.isPositive ? '+' : '-'}{trendGrowth.value}
@@ -246,12 +336,9 @@ export default function AdminDashboard() {
           {weeklyTrend.length === 0 && <div className="w-full text-center text-sm text-slate-400 font-medium">Memuat data tren...</div>}
           {weeklyTrend.map((data, i) => (
             <div key={i} className="flex flex-col items-center gap-2 md:gap-3 flex-1 group h-full justify-end relative">
-              
-              {/* Tooltip Hover */}
               <div className="absolute -top-10 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-800 text-white text-[10px] font-bold py-1 px-3 rounded-lg pointer-events-none whitespace-nowrap shadow-lg">
-                Rp {data.value.toLocaleString('id-ID')}
+                Rp {formatCurrency(data.value)}
               </div>
-
               <div className="w-full bg-slate-50 rounded-md md:rounded-lg relative flex items-end h-full overflow-hidden border border-slate-100">
                 <div 
                   className={`w-full rounded-md md:rounded-lg transition-all duration-1000 ${data.isToday ? 'bg-blue-600 shadow-[0_-5px_15px_rgba(37,99,235,0.3)]' : 'bg-slate-300 group-hover:bg-slate-400'}`} 
@@ -270,7 +357,7 @@ export default function AdminDashboard() {
       <div className="flex flex-col md:flex-row justify-between md:items-end gap-3 md:gap-4 mb-4 md:mb-6 border-b border-slate-200 pb-4">
         <div>
           <h3 className="text-xl md:text-2xl font-black text-slate-800 tracking-tight">Papan Operasional Harian</h3>
-          <p className="text-xs md:text-sm text-slate-500 font-medium mt-1">Pantau pergerakan transaksi dan alokasi driver secara live.</p>
+          <p className="text-xs md:text-sm text-slate-500 font-medium mt-1">Pantau pergerakan transaksi dan pembagian profit secara live.</p>
         </div>
         <Link href="/admin/orders">
           <button className="flex items-center justify-center w-full md:w-auto gap-2 text-xs md:text-sm text-blue-600 font-bold bg-blue-50 hover:bg-blue-100 px-5 py-2.5 rounded-xl transition-all border border-blue-100">
@@ -279,7 +366,6 @@ export default function AdminDashboard() {
         </Link>
       </div>
 
-      {/* CONTAINER HORIZONTAL SCROLL UNTUK HP */}
       <div className="flex overflow-x-auto pb-6 -mx-4 px-4 md:mx-0 md:px-0 md:grid md:grid-cols-2 xl:grid-cols-3 gap-4 md:gap-6 snap-x snap-mandatory hide-scrollbar">
         
         {/* KOLOM 1: PENDING */}
@@ -301,17 +387,29 @@ export default function AdminDashboard() {
                   <span className="text-[10px] font-bold text-slate-400">{formatTime(order.createdAt)}</span>
                 </div>
                 <h5 className="font-black text-slate-800 text-sm mb-1 truncate">{order.customerName}</h5>
-                <p className="text-xs font-bold text-slate-500 flex items-center gap-1.5 mb-3 truncate">
+                <p className="text-xs font-bold text-slate-500 flex items-center gap-1.5 mb-2 truncate">
                   <MapPin size={12} className="text-amber-500 shrink-0" /> {order.serviceName}
                 </p>
-                <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+
+                <div className="bg-slate-50 p-2 rounded-lg border border-slate-100 mb-3 flex justify-between items-center">
                   <div>
-                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Tagihan</p>
-                    <span className="text-sm font-black text-slate-800 tracking-tight">Rp {order.totalPrice?.toLocaleString('id-ID')}</span>
+                    <p className="text-[9px] text-slate-400 uppercase font-bold flex items-center gap-1"><Weight size={10}/> Kriteria</p>
+                    <p className="text-[11px] font-bold text-indigo-600 capitalize mt-0.5">{order.commissionTier || 'Sedang'}</p>
                   </div>
                   <div className="text-right">
-                    <p className="text-[9px] font-bold text-emerald-500 uppercase tracking-widest">Potensi Komisi</p>
-                    <span className="text-sm font-black text-emerald-600 tracking-tight">+ Rp {getOwnerCommission(order.commissionTier, order.totalPrice).toLocaleString('id-ID')}</span>
+                    <p className="text-[9px] text-slate-400 uppercase font-bold">Total Tagihan</p>
+                    <p className="text-xs font-black text-slate-800 mt-0.5">Rp {formatCurrency(getTotalTagihan(order))}</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                  <div>
+                    <p className="text-[9px] font-bold text-emerald-500 uppercase flex items-center gap-1"><Landmark size={10}/> Profit Owner</p>
+                    <span className="text-[11px] font-black text-emerald-600 tracking-tight">Rp {formatCurrency(getOwnerCommission(order, settings))}</span>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[9px] font-bold text-blue-500 uppercase flex justify-end gap-1"><User size={10}/> Profit Driver</p>
+                    <span className="text-[11px] font-black text-blue-600 tracking-tight">Rp {formatCurrency(getDriverProfit(order, settings))}</span>
                   </div>
                 </div>
               </div>
@@ -340,13 +438,31 @@ export default function AdminDashboard() {
                     <span className="flex items-center gap-1 text-blue-500 text-[9px] font-black animate-pulse uppercase tracking-widest"><Clock size={10} /> Active</span>
                   </div>
                   <h5 className="font-black text-slate-800 text-sm mb-2 truncate">{order.customerName}</h5>
-                  <div className="bg-slate-50 rounded-lg p-2 mb-3 border border-slate-100 flex items-center justify-between">
+                  <div className="bg-slate-50 rounded-lg p-2 mb-2 border border-slate-100 flex items-center justify-between">
                      <span className="text-[10px] font-bold text-slate-500">Driver Bertugas:</span>
                      <span className="text-xs font-black text-blue-700 bg-white px-2 py-0.5 rounded shadow-sm border border-slate-200">{order.driverCode}</span>
                   </div>
+
+                  <div className="bg-slate-50 p-2 rounded-lg border border-slate-100 mb-3 flex justify-between items-center">
+                    <div>
+                      <p className="text-[9px] text-slate-400 uppercase font-bold flex items-center gap-1"><Weight size={10}/> Kriteria</p>
+                      <p className="text-[11px] font-bold text-indigo-600 capitalize mt-0.5">{order.commissionTier || 'Sedang'}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[9px] text-slate-400 uppercase font-bold">Total Tagihan</p>
+                      <p className="text-xs font-black text-slate-800 mt-0.5">Rp {formatCurrency(getTotalTagihan(order))}</p>
+                    </div>
+                  </div>
+
                   <div className="flex items-center justify-between pt-2 border-t border-slate-50">
-                    <span className="text-xs font-black text-slate-600 tracking-tight">Total: Rp {order.totalPrice?.toLocaleString('id-ID')}</span>
-                    <span className="text-xs font-black text-emerald-500 tracking-tight">+ Rp {getOwnerCommission(order.commissionTier, order.totalPrice).toLocaleString('id-ID')}</span>
+                    <div>
+                      <p className="text-[9px] font-bold text-emerald-500 uppercase flex items-center gap-1"><Landmark size={10}/> Profit Owner</p>
+                      <span className="text-[11px] font-black text-emerald-600 tracking-tight">Rp {formatCurrency(getOwnerCommission(order, settings))}</span>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[9px] font-bold text-blue-500 uppercase flex justify-end gap-1"><User size={10}/> Profit Driver</p>
+                      <span className="text-[11px] font-black text-blue-600 tracking-tight">Rp {formatCurrency(getDriverProfit(order, settings))}</span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -366,15 +482,33 @@ export default function AdminDashboard() {
           <div className="space-y-3">
             {ordersCompleted.length === 0 && <p className="text-center text-slate-400 text-xs md:text-sm font-medium py-10 border-2 border-dashed border-slate-200 rounded-2xl">Belum ada penyelesaian.</p>}
             {ordersCompleted.map(order => (
-              <div key={order.id} className="bg-white p-3 md:p-4 rounded-xl border border-slate-100 shadow-sm opacity-80 hover:opacity-100 transition-opacity">
+              <div key={order.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm opacity-90 hover:opacity-100 transition-opacity">
                 <div className="flex justify-between items-center mb-2">
                   <span className="text-[9px] font-black text-slate-500 bg-slate-100 px-2 py-0.5 rounded uppercase">{order.invoice}</span>
                   <span className="text-[9px] font-bold text-slate-400">{formatTime(order.createdAt)}</span>
                 </div>
-                <h5 className="font-extrabold text-slate-700 text-xs md:text-sm mb-2 truncate">{order.customerName}</h5>
-                <div className="flex items-center justify-between">
-                  <span className="text-[9px] font-bold text-slate-400 uppercase">Driver: {order.driverCode || '-'}</span>
-                  <span className="text-xs font-black text-emerald-600">+ Rp {getOwnerCommission(order.commissionTier, order.totalPrice).toLocaleString('id-ID')}</span>
+                <h5 className="font-extrabold text-slate-700 text-sm mb-2 truncate">{order.customerName}</h5>
+                
+                <div className="bg-slate-50 p-2 rounded-lg border border-slate-100 mb-2 flex justify-between items-center">
+                  <div>
+                    <p className="text-[9px] text-slate-400 uppercase font-bold flex items-center gap-1"><Weight size={10}/> Kriteria</p>
+                    <p className="text-[10px] font-bold text-indigo-600 capitalize mt-0.5">{order.commissionTier || 'Sedang'}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[9px] text-slate-400 uppercase font-bold">Total Tagihan</p>
+                    <p className="text-[11px] font-black text-slate-800 mt-0.5">Rp {formatCurrency(getTotalTagihan(order))}</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between pt-2">
+                  <div>
+                    <p className="text-[8px] font-bold text-emerald-500 uppercase flex items-center gap-1"><Landmark size={10}/> Profit Owner</p>
+                    <span className="text-[10px] font-black text-emerald-600 tracking-tight">Rp {formatCurrency(getOwnerCommission(order, settings))}</span>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[8px] font-bold text-blue-500 uppercase flex justify-end gap-1"><User size={10}/> {order.driverCode}</p>
+                    <span className="text-[10px] font-black text-blue-600 tracking-tight">Rp {formatCurrency(getDriverProfit(order, settings))}</span>
+                  </div>
                 </div>
               </div>
             ))}
@@ -383,15 +517,9 @@ export default function AdminDashboard() {
 
       </div>
       
-      {/* STYLE CSS UNTUK MENYEMBUNYIKAN SCROLLBAR DI HP TAPI TETAP BISA SCROLL */}
       <style dangerouslySetInnerHTML={{__html: `
-        .hide-scrollbar::-webkit-scrollbar {
-          display: none;
-        }
-        .hide-scrollbar {
-          -ms-overflow-style: none;
-          scrollbar-width: none;
-        }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
       `}} />
 
     </div>

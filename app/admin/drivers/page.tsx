@@ -3,24 +3,32 @@ import { useState, useEffect } from "react";
 import { 
   Search, Plus, MapPin, Phone, Car, ShieldCheck, 
   MessageCircle, Wallet, CalendarDays, RefreshCw, X, Save,
-  Ban, CheckCircle2, Trash2, TrendingUp, Landmark,
-  ArrowDownToLine, ArrowUpRight, Clock, Receipt, Image as ImageIcon, User
+  Ban, CheckCircle2, Trash2, Landmark,
+  ArrowDownToLine, ArrowUpRight, Clock, Receipt, Image as ImageIcon, User, ShoppingCart
 } from "lucide-react";
 import { db } from "@/lib/firebase";
-import { collection, query, where, getDocs, doc, updateDoc, deleteDoc } from "firebase/firestore";
+import { collection, query, where, getDocs, doc, updateDoc, deleteDoc, getDoc } from "firebase/firestore";
+
+// HELPER UNTUK MENCEGAH PEMBULATAN RUPIAH (MENAMPILKAN DESIMAL JIKA ADA)
+const formatCurrency = (amount: number) => {
+  return Number(amount).toLocaleString('id-ID', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+};
 
 export default function DriverManagementPage() {
   const [isLoaded, setIsLoaded] = useState(false);
   
   // STATE FILTER
   const [searchTerm, setSearchTerm] = useState("");
-  const [filterDate, setFilterDate] = useState(""); // NEW: Filter Tanggal Harian
+  const [filterDate, setFilterDate] = useState(""); // Filter Tanggal Harian
   
   // STATE RAW DATA (SINGLE SOURCE OF TRUTH)
   const [rawDrivers, setRawDrivers] = useState<any[]>([]);
   const [rawOrders, setRawOrders] = useState<any[]>([]);
   const [rawWithdrawals, setRawWithdrawals] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+
+  // STATE SETTING DATABASE
+  const [settings, setSettings] = useState<any>(null); 
 
   // STATE FORM MODAL TAMBAH DRIVER
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -35,7 +43,7 @@ export default function DriverManagementPage() {
   const [proofModal, setProofModal] = useState<string | null>(null);
 
   // ========================================================
-  // RUMUS MATEMATIKA STANDARD 
+  // RUMUS REAL TANPA PEMBULATAN (Owner: 16,15,13 | Driver: 84,85,87)
   // ========================================================
   const getSubtotalJasa = (order: any) => {
     const qty = Number(order.quantity) || 1;
@@ -47,19 +55,27 @@ export default function DriverManagementPage() {
     return calc > 0 ? calc : total;
   };
 
-  const getOwnerComm = (order: any) => {
+  const getOwnerCommission = (order: any, appSettings: any) => {
     if (order.exactOwnerCommission !== undefined) return order.exactOwnerCommission;
     const base = getSubtotalJasa(order); 
-    const tier = order.commissionTier || 'sedang';
-    if (tier === 'ringan') return base * 0.30;
-    if (tier === 'sedang') return base * 0.20;
-    if (tier === 'berat') return base * 0.10;
-    return 0;
+    const tier = order.commissionTier?.toLowerCase() || 'sedang';
+    
+    let pct = 0.15; 
+    
+    if (appSettings && appSettings.commissions && appSettings.commissions[tier] !== undefined) {
+       pct = Number(appSettings.commissions[tier]) / 100;
+    } else {
+       if (tier === 'ringan') pct = 0.16;
+       else if (tier === 'sedang') pct = 0.15;
+       else if (tier === 'berat') pct = 0.13;
+    }
+    
+    return base * pct;
   };
 
-  const getDriverNet = (order: any) => {
+  const getDriverProfit = (order: any, appSettings: any) => {
     const base = getSubtotalJasa(order);
-    const ownerComm = getOwnerComm(order);
+    const ownerComm = getOwnerCommission(order, appSettings);
     const urgent = Number(order.urgentFee) || 0;
     return (base - ownerComm) + urgent;
   };
@@ -74,16 +90,26 @@ export default function DriverManagementPage() {
   };
 
   // ========================================================
-  // FETCH DATA MENTAH DARI DATABASE
+  // FETCH DATA MENTAH DARI DATABASE (NO-CACHE)
   // ========================================================
   const fetchDrivers = async () => {
     setIsLoading(true);
     try {
-      const [resDrivers, resOrders, snapWithdraw] = await Promise.all([
-        fetch("/api/drivers"),
-        fetch("/api/orders"),
-        getDocs(collection(db, "withdrawals"))
+      // PENAMBAHAN CACHE: NO-STORE & WAKTU AGAR REAL-TIME
+      const timestamp = new Date().getTime();
+      const [resDrivers, resOrders, snapWithdraw, snapSettings] = await Promise.all([
+        fetch(`/api/drivers?_t=${timestamp}`, { cache: "no-store" }),
+        fetch(`/api/orders?_t=${timestamp}`, { cache: "no-store" }),
+        getDocs(collection(db, "withdrawals")),
+        getDoc(doc(db, "settings", "global"))
       ]);
+      
+      let currentSettings = null;
+      if (snapSettings.exists()) {
+        currentSettings = snapSettings.data();
+        setSettings(currentSettings);
+      }
+
       const driversResult = await resDrivers.json();
       const ordersResult = await resOrders.json();
       
@@ -104,16 +130,17 @@ export default function DriverManagementPage() {
   useEffect(() => {
     setIsLoaded(true);
     fetchDrivers();
+    // Auto refresh tiap 15 detik agar status Online/Offline terus ter-update secara Live
+    const interval = setInterval(fetchDrivers, 15000);
+    return () => clearInterval(interval);
   }, []);
 
   // ========================================================
   // KALKULASI DINAMIS (TERPENGARUH OLEH FILTER TANGGAL)
   // ========================================================
   const processedDrivers = rawDrivers.map((driver) => {
-    // 1. Ambil order yang selesai untuk driver ini
     let targetOrders = rawOrders.filter((o: any) => o.driverCode === driver.code && o.status === 'completed');
 
-    // 2. Filter berdasarkan tanggal (jika ada)
     if (filterDate) {
       targetOrders = targetOrders.filter((o: any) => {
         if (!o.createdAt) return false;
@@ -124,18 +151,24 @@ export default function DriverManagementPage() {
       });
     }
 
-    // 3. Kalkulasi Uang
     let omzetKotor = 0;
     let komisiOwner = 0;
     let hakDriver = 0;
 
     targetOrders.forEach((o: any) => {
       omzetKotor += (getSubtotalJasa(o) + (Number(o.urgentFee) || 0));
-      komisiOwner += getOwnerComm(o);
-      hakDriver += getDriverNet(o);
+      komisiOwner += getOwnerCommission(o, settings);
+      hakDriver += getDriverProfit(o, settings);
     });
 
+    let pendingReimburseAmount = 0;
     const pendingW = rawWithdrawals.filter(w => w.driverCode === driver.code && w.status === 'pending');
+    
+    pendingW.forEach(w => {
+      if (w.type === 'reimburse') {
+        pendingReimburseAmount += (Number(w.amount) || 0);
+      }
+    });
 
     return {
       ...driver,
@@ -143,7 +176,8 @@ export default function DriverManagementPage() {
       omzetKotor,
       komisiOwner,
       hakDriver,
-      pendingWithdrawals: pendingW.length
+      pendingWithdrawals: pendingW.length,
+      pendingReimburseAmount
     };
   }).filter(driver => {
     return (
@@ -165,7 +199,7 @@ export default function DriverManagementPage() {
       const res = await fetch("/api/drivers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(newDriver)
+        body: JSON.stringify({...newDriver, status: "aktif", isOnline: false})
       });
       const result = await res.json();
       
@@ -188,14 +222,15 @@ export default function DriverManagementPage() {
     const newStatus = currentStatus === 'suspend' ? 'aktif' : 'suspend';
     const actionName = newStatus === 'suspend' ? 'Membekukan' : 'Mengaktifkan';
 
-    if (confirm(`Apakah Anda yakin ingin ${actionName} akun driver ${code}?`)) {
+    if (confirm(`Apakah Anda yakin ingin ${actionName} akun driver ${code}?\n\nJika dibekukan, driver ini akan otomatis ter-logout dan tidak bisa masuk ke sistem.`)) {
       try {
         const q = query(collection(db, "drivers"), where("code", "==", code));
         const snap = await getDocs(q);
         
         if (!snap.empty) {
           const docId = snap.docs[0].id;
-          await updateDoc(doc(db, "drivers", docId), { status: newStatus });
+          // Membekukan sekaligus memaksa status offline
+          await updateDoc(doc(db, "drivers", docId), { status: newStatus, isOnline: false });
           alert(`Akun driver ${code} berhasil ${newStatus === 'suspend' ? 'dibekukan' : 'diaktifkan kembali'}.`);
           fetchDrivers();
         }
@@ -254,7 +289,7 @@ export default function DriverManagementPage() {
           <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Manajemen Armada & Driver</h2>
           <div className="flex items-center gap-1.5 mt-1 text-slate-500 text-[13px] font-medium">
             <CalendarDays size={14} className="text-blue-500" />
-            <span>Pantau total omzet, pembagian profit, dan kelola dana driver.</span>
+            <span>Pantau total omzet, status online, dan kelola dana driver.</span>
           </div>
         </div>
         <div className="flex gap-2 w-full lg:w-auto">
@@ -293,10 +328,13 @@ export default function DriverManagementPage() {
         
         <div className="text-[13px] font-medium text-slate-500 px-2 flex items-center justify-between sm:justify-start gap-3 bg-slate-50 py-1.5 px-3 rounded-lg border border-slate-100 w-full md:w-auto">
           <div className="flex items-center gap-1.5">
-            <Car size={16} className="text-slate-400"/> Armada Aktif: <span className="font-bold text-blue-600">{processedDrivers.length}</span>
+            <Car size={16} className="text-slate-400"/> Armada Terdaftar: <span className="font-bold text-slate-700">{processedDrivers.length}</span>
+          </div>
+          <div className="flex items-center gap-1.5 border-l border-slate-300 pl-3">
+            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div> Online: <span className="font-bold text-emerald-600">{processedDrivers.filter(d => d.isOnline === true).length}</span>
           </div>
           {filterDate && (
-             <span className="text-[10px] font-bold bg-indigo-100 text-indigo-600 px-2 py-0.5 rounded">
+             <span className="text-[10px] font-bold bg-indigo-100 text-indigo-600 px-2 py-0.5 rounded ml-2">
                Laporan Harian
              </span>
           )}
@@ -322,6 +360,7 @@ export default function DriverManagementPage() {
           {processedDrivers.map((driver) => {
             const dStatus = driver.status || 'aktif';
             const isSuspended = dStatus === 'suspend';
+            const isOnline = driver.isOnline === true;
             
             return (
               <div key={driver.code} className={`bg-white rounded-2xl p-5 shadow-sm border transition-all duration-300 relative flex flex-col ${isSuspended ? 'border-rose-200 bg-rose-50/10' : 'border-slate-200 hover:border-blue-200 hover:shadow-md'}`}>
@@ -336,22 +375,34 @@ export default function DriverManagementPage() {
                           driver.name ? driver.name.substring(0,2) : "DR"
                         )}
                       </div>
-                      <div className={`absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full border-2 border-white ${isSuspended ? 'bg-rose-500' : 'bg-emerald-500'}`} title={isSuspended ? 'Ditangguhkan' : 'Aktif'}></div>
+                      <div className={`absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full border-2 border-white ${isSuspended ? 'bg-rose-500' : (isOnline ? 'bg-emerald-500' : 'bg-slate-400')}`} title={isSuspended ? 'Ditangguhkan' : (isOnline ? 'Online' : 'Offline')}></div>
                     </div>
                     <div>
                       <h3 className="font-bold text-slate-800 text-sm tracking-tight line-clamp-1 leading-snug">
                         {driver.name}
                       </h3>
-                      <div className="flex items-center gap-1.5 mt-1">
+                      
+                      {/* LENCANA ONLINE / OFFLINE / SUSPEND */}
+                      <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                         <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded uppercase tracking-wider bg-slate-100 text-slate-500 border border-slate-200">
                           {driver.code}
                         </span>
-                        {isSuspended && (
-                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-rose-100 text-rose-600">
-                            Beku
+                        
+                        {isSuspended ? (
+                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-rose-100 text-rose-600 border border-rose-200">
+                            Beku (Suspend)
+                          </span>
+                        ) : isOnline ? (
+                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> Online
+                          </span>
+                        ) : (
+                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-slate-50 text-slate-400 border border-slate-200 flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span> Offline
                           </span>
                         )}
                       </div>
+
                     </div>
                   </div>
 
@@ -387,7 +438,7 @@ export default function DriverManagementPage() {
                   </div>
                 </div>
 
-                <div className="bg-slate-50 rounded-xl p-3.5 border border-slate-100 space-y-2.5 mb-4 flex-1">
+                <div className="bg-slate-50 rounded-xl p-3.5 border border-slate-100 space-y-2.5 mb-3 flex-1">
                   <div className="flex items-start gap-2">
                     <Car size={14} className="text-slate-400 mt-0.5 shrink-0" />
                     <span className="text-[11px] font-medium text-slate-600 leading-tight">
@@ -415,6 +466,17 @@ export default function DriverManagementPage() {
                   </div>
                 </div>
 
+                {/* INDIKATOR HUTANG TALANGAN YANG BELUM OWNER LUNASI */}
+                {driver.pendingReimburseAmount > 0 && (
+                  <div className="bg-rose-50 border border-rose-200 rounded-lg p-2.5 mb-4 flex justify-between items-center animate-in fade-in">
+                    <div className="flex items-center gap-1.5">
+                       <ShoppingCart size={14} className="text-rose-500" />
+                       <span className="text-[10px] font-bold text-rose-600 uppercase tracking-widest">Hutang Talangan</span>
+                    </div>
+                    <span className="text-sm font-black text-rose-700">Rp {formatCurrency(driver.pendingReimburseAmount)}</span>
+                  </div>
+                )}
+
                 {/* STATISTIK KINERJA 2x2 (OMZET, OWNER, DRIVER) */}
                 <div className="grid grid-cols-2 gap-2 pt-3 border-t border-slate-100 mt-auto">
                   <div className="flex flex-col bg-slate-50 p-2.5 rounded-xl border border-slate-100">
@@ -423,15 +485,15 @@ export default function DriverManagementPage() {
                   </div>
                   <div className="flex flex-col bg-blue-50 p-2.5 rounded-xl border border-blue-100">
                     <p className="text-[9px] font-bold text-blue-600 uppercase tracking-widest mb-0.5 flex items-center gap-1"><Wallet size={10} /> Omzet Gross</p>
-                    <p className="text-sm font-black text-blue-700">Rp {(driver.omzetKotor || 0).toLocaleString('id-ID')}</p>
+                    <p className="text-sm font-black text-blue-700">Rp {formatCurrency(driver.omzetKotor || 0)}</p>
                   </div>
                   <div className="flex flex-col bg-emerald-50 p-2.5 rounded-xl border border-emerald-100">
                     <p className="text-[9px] font-bold text-emerald-600 uppercase tracking-widest mb-0.5 flex items-center gap-1"><Landmark size={10} /> Profit Owner</p>
-                    <p className="text-sm font-black text-emerald-700">Rp {(driver.komisiOwner || 0).toLocaleString('id-ID')}</p>
+                    <p className="text-sm font-black text-emerald-700">Rp {formatCurrency(driver.komisiOwner || 0)}</p>
                   </div>
                   <div className="flex flex-col bg-indigo-50 p-2.5 rounded-xl border border-indigo-100">
                     <p className="text-[9px] font-bold text-indigo-600 uppercase tracking-widest mb-0.5 flex items-center gap-1"><User size={10} /> Profit Driver</p>
-                    <p className="text-sm font-black text-indigo-700">Rp {(driver.hakDriver || 0).toLocaleString('id-ID')}</p>
+                    <p className="text-sm font-black text-indigo-700">Rp {formatCurrency(driver.hakDriver || 0)}</p>
                   </div>
                 </div>
 
@@ -548,7 +610,7 @@ export default function DriverManagementPage() {
                             
                             <div className="text-left md:text-right bg-slate-50 md:bg-transparent p-3 md:p-0 rounded-xl md:rounded-none border md:border-0 border-slate-100 w-full md:w-auto">
                               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Nominal Permintaan</p>
-                              <h4 className="text-xl font-black text-slate-800">Rp {Number(trx.amount).toLocaleString('id-ID')}</h4>
+                              <h4 className="text-xl font-black text-slate-800">Rp {formatCurrency(Number(trx.amount))}</h4>
                             </div>
                           </div>
 

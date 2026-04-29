@@ -5,7 +5,7 @@ import {
   User, MapPin, Package, Clock, Car, 
   ArrowRight, ShieldCheck, Phone, Map, 
   Hammer, Brain, Calculator, Info, Flame, Weight,
-  ShoppingCart
+  ShoppingCart, Camera, X, Image as ImageIcon
 } from "lucide-react";
 
 export default function NewOrderPage() {
@@ -38,17 +38,23 @@ export default function NewOrderPage() {
   
   const [customServiceName, setCustomServiceName] = useState("");
   const [serviceDetails, setServiceDetails] = useState(""); 
-  const [basePrice, setBasePrice] = useState<number | "">("");
+  
+  // STATE FOTO DETAIL PEKERJAAN
+  const [jobImageFile, setJobImageFile] = useState<File | null>(null);
+  const [jobImagePreview, setJobImagePreview] = useState<string | null>(null);
+
+  // STATE PEMISAHAN TARIF (ONGKIR & JASA)
+  const [shippingFee, setShippingFee] = useState<number | "">("");
+  const [serviceFee, setServiceFee] = useState<number | "">("");
+  
   const [quantity, setQuantity] = useState<number | "">(1);
   const [unit, setUnit] = useState("KM"); 
   
-  // STATE LOKASI RUTENYA DRIVER
   const [origin, setOrigin] = useState("");
   const [destination, setDestination] = useState("");
   const [isCalculatingMap, setIsCalculatingMap] = useState(false);
 
   const [commissionTier, setCommissionTier] = useState("sedang");
-  const [driverCommissionPct, setDriverCommissionPct] = useState<number | "">(80); 
   
   const [driverCode, setDriverCode] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("qris");
@@ -82,9 +88,14 @@ export default function NewOrderPage() {
 
   const handleTierChange = (tier: string) => {
     setCommissionTier(tier);
-    if (tier === "ringan") setDriverCommissionPct(70);
-    if (tier === "sedang") setDriverCommissionPct(80);
-    if (tier === "berat") setDriverCommissionPct(90);
+  };
+
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      setJobImageFile(file);
+      setJobImagePreview(URL.createObjectURL(file));
+    }
   };
 
   const handleHitungKM = async (e: React.MouseEvent) => {
@@ -110,7 +121,10 @@ export default function NewOrderPage() {
     }
   };
 
-  const numBasePrice = Number(basePrice) || 0;
+  // KALKULASI MATEMATIKA YANG SUDAH DIPISAH
+  const numShippingFee = Number(shippingFee) || 0;
+  const numServiceFee = Number(serviceFee) || 0;
+  const numBasePrice = numShippingFee + numServiceFee; // Gabungan tarif untuk dihitung persentasenya
   const numQty = selectedCategories.includes("Waktu") && unit === "Borongan/Flat" ? 1 : (Number(quantity) || 1);
   const subtotalJasa = numBasePrice * numQty; 
   
@@ -118,14 +132,35 @@ export default function NewOrderPage() {
   const totalHarga = subtotalJasa + numUrgentFee;
 
   const submitOrder = async () => {
-    if (!customerName || !customerPhone || !customerAddress || !customServiceName || !basePrice) {
-      alert("Peringatan: Nama Pelanggan, No WA, Alamat, Nama Jasa, dan Tarif Dasar wajib diisi!");
+    if (!customerName || !customerPhone || !customerAddress || !customServiceName) {
+      alert("Peringatan: Nama Pelanggan, No WA, Alamat, dan Nama Jasa wajib diisi!");
+      return;
+    }
+    if (numShippingFee === 0 && numServiceFee === 0) {
+      alert("Peringatan: Anda harus mengisi setidaknya salah satu dari Tarif Ongkir atau Tarif Jasa!");
       return;
     }
 
     setIsSubmitting(true);
 
     try {
+      // 1. Upload Gambar Jika Ada
+      let uploadedImageUrl = null;
+      if (jobImageFile) {
+        const formData = new FormData();
+        formData.append("file", jobImageFile);
+        formData.append("upload_preset", "mtm-mlg");
+        
+        const cloudinaryRes = await fetch(`https://api.cloudinary.com/v1_1/dwprlhbzb/image/upload`, { 
+          method: "POST", 
+          body: formData 
+        });
+        const cloudinaryData = await cloudinaryRes.json();
+        if (cloudinaryData.secure_url) {
+          uploadedImageUrl = cloudinaryData.secure_url;
+        }
+      }
+
       const ordersRes = await fetch("/api/orders");
       const ordersData = await ordersRes.json();
       
@@ -154,16 +189,19 @@ export default function NewOrderPage() {
         category: selectedCategories.join(", "), 
         serviceName: customServiceName,
         serviceDetails: serviceDetails, 
-        basePrice: numBasePrice, 
+        jobImageUrl: uploadedImageUrl, // Gambar lampiran untuk driver
+        
+        basePrice: numBasePrice, // Total gabungan ongkir & jasa (untuk backward compatibility)
+        shippingFee: numShippingFee, // Rincian ongkir murni
+        serviceFee: numServiceFee,   // Rincian jasa murni
+        
         shoppingCost: 0, 
         unit,
         quantity: numQty,
         commissionTier,
         
-        // MENGIRIMKAN DATA ALAMAT DARI & KE UNTUK DIBACA DRIVER
         origin: origin || null,
         destination: destination || null,
-        
         driverCode: driverCode || null,
         paymentMethod,
         isUrgent,
@@ -206,7 +244,7 @@ export default function NewOrderPage() {
       <div className="mb-8 border-b border-slate-200 pb-5 mt-2">
         <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Buat Pesanan Custom</h2>
         <p className="text-slate-500 mt-1.5 text-sm font-medium flex items-center gap-2">
-          <Info size={16} className="text-blue-500" /> Rincian jasa, tarif, dan beban kerja dapat disesuaikan manual.
+          <Info size={16} className="text-blue-500" /> Rincian jasa, tarif pengiriman, dan beban kerja dapat disesuaikan manual.
         </p>
       </div>
 
@@ -269,7 +307,7 @@ export default function NewOrderPage() {
           <div className="bg-white rounded-[1.5rem] p-6 shadow-sm border border-slate-200">
             <div className="flex items-center gap-3 mb-5 border-b border-slate-100 pb-3">
               <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg"><Package size={18} strokeWidth={2.5} /></div>
-              <h3 className="text-lg font-bold text-slate-800 tracking-tight">Detail Rincian Jasa</h3>
+              <h3 className="text-lg font-bold text-slate-800 tracking-tight">Detail Rincian Jasa & Tarif</h3>
             </div>
             
             <p className="text-xs text-slate-500 mb-3 font-medium">Bisa pilih lebih dari satu kategori (Multi-Jasa):</p>
@@ -293,9 +331,6 @@ export default function NewOrderPage() {
               })}
             </div>
 
-            {/* ========================================================== */}
-            {/* BLOK LOKASI DARI & KE (DIPERJELAS FUNGSINYA) */}
-            {/* ========================================================== */}
             <div className="mb-6 animate-in fade-in slide-in-from-top-2 bg-blue-50/80 p-5 rounded-2xl border border-blue-100 shadow-sm">
               <div className="flex items-center justify-between mb-4">
                 <label className="text-sm font-extrabold text-blue-800 flex items-center gap-1.5">
@@ -350,6 +385,7 @@ export default function NewOrderPage() {
             </div>
 
             <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-5">
+              
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-slate-700 ml-1">Nama Jasa / Judul Pekerjaan</label>
                 <input 
@@ -368,19 +404,43 @@ export default function NewOrderPage() {
                   onChange={(e) => setServiceDetails(e.target.value)}
                   placeholder="Tuliskan instruksi lengkap untuk driver (misal: daftar rincian belanjaan, dll)..." 
                   rows={4}
-                  className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100 transition-all text-slate-800 text-sm font-medium resize-y min-h-[100px]" 
+                  className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100 transition-all text-slate-800 text-sm font-medium resize-y min-h-[80px]" 
                 />
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              {/* UPLOAD FOTO UNTUK DRIVER */}
+              <div className="space-y-1.5 pt-2">
+                <label className="text-xs font-bold text-slate-700 ml-1 flex items-center gap-1.5">
+                  <ImageIcon size={14} className="text-blue-500"/> Lampirkan Foto / Gambar (Opsional)
+                </label>
+                {jobImagePreview ? (
+                  <div className="relative inline-block w-full max-w-sm">
+                    <img src={jobImagePreview} alt="Bukti Lampiran" className="w-full h-40 object-cover rounded-xl border border-slate-300 shadow-sm" />
+                    <button type="button" onClick={() => { setJobImageFile(null); setJobImagePreview(null); }} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1.5 shadow-md hover:bg-rose-600 transition-all">
+                      <X size={14} strokeWidth={3} />
+                    </button>
+                  </div>
+                ) : (
+                  <label className="cursor-pointer bg-white border-2 border-slate-300 border-dashed hover:border-blue-400 hover:bg-blue-50/50 text-slate-500 font-medium py-5 px-4 rounded-xl flex flex-col items-center justify-center transition-colors w-full group">
+                    <div className="bg-slate-50 p-2 rounded-full shadow-sm border border-slate-200 mb-2 group-hover:scale-110 transition-transform">
+                      <Camera size={20} className="text-blue-500" />
+                    </div>
+                    <span className="text-[11px] font-bold text-slate-600">Klik untuk upload foto detail/barang dari pelanggan</span>
+                    <input type="file" accept="image/*" className="hidden" onChange={handleImageChange} />
+                  </label>
+                )}
+              </div>
+
+              {/* PEMISAHAN TARIF ONGKIR & JASA */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-3 border-t border-slate-200">
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-blue-700 ml-1">Tarif Dasar / Ongkir Jasa</label>
+                  <label className="text-xs font-bold text-blue-700 ml-1">Tarif Ongkir (Pengiriman)</label>
                   <div className="flex items-center w-full px-4 py-3 bg-white border border-blue-200 rounded-xl focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-100 transition-all overflow-hidden">
                     <span className="text-blue-400 font-bold mr-2 text-xs border-r border-blue-200 pr-2">Rp</span>
                     <input 
                       type="number" 
-                      value={basePrice}
-                      onChange={(e) => setBasePrice(Number(e.target.value) || "")}
+                      value={shippingFee}
+                      onChange={(e) => setShippingFee(Number(e.target.value) || "")}
                       placeholder="0" 
                       className="flex-1 w-full bg-transparent border-0 outline-none p-0 text-blue-800 font-extrabold text-base" 
                     />
@@ -388,7 +448,25 @@ export default function NewOrderPage() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 ml-1">Satuan</label>
+                  <label className="text-xs font-bold text-indigo-700 ml-1">Tarif Jasa (Pekerjaan Tambahan)</label>
+                  <div className="flex items-center w-full px-4 py-3 bg-white border border-indigo-200 rounded-xl focus-within:border-indigo-500 focus-within:ring-4 focus-within:ring-indigo-100 transition-all overflow-hidden">
+                    <span className="text-indigo-400 font-bold mr-2 text-xs border-r border-indigo-200 pr-2">Rp</span>
+                    <input 
+                      type="number" 
+                      value={serviceFee}
+                      onChange={(e) => setServiceFee(Number(e.target.value) || "")}
+                      placeholder="0" 
+                      className="flex-1 w-full bg-transparent border-0 outline-none p-0 text-indigo-800 font-extrabold text-base" 
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-700 ml-1 flex items-center justify-between w-full">
+                    <span>Satuan Harga</span>
+                  </label>
                   {selectedCategories.length === 1 && selectedCategories[0] === "Waktu" ? (
                     <select 
                       value={unit}
@@ -409,12 +487,10 @@ export default function NewOrderPage() {
                     />
                   )}
                 </div>
-              </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold text-slate-700 ml-1">
-                    Jumlah {unit !== "Borongan/Flat" ? unit : ""}
+                    Jumlah / Pengali ({unit !== "Borongan/Flat" ? unit : "-"})
                   </label>
                   <input 
                     type="number" 
@@ -425,31 +501,30 @@ export default function NewOrderPage() {
                     className={`w-full px-4 py-3 border border-slate-300 rounded-xl outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100 transition-all text-slate-800 font-extrabold text-base ${unit === 'Borongan/Flat' ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-white'}`} 
                   />
                 </div>
-                
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 ml-1 flex items-center gap-1.5">
-                    <Weight size={12} className="text-indigo-600" /> Kriteria Beban Jasa
-                  </label>
-                  <div className="bg-white p-1 rounded-xl flex border border-slate-300">
-                    {[
-                      { id: "ringan", label: "Ringan" },
-                      { id: "sedang", label: "Sedang" },
-                      { id: "berat", label: "Berat" }
-                    ].map((tier) => (
-                      <button
-                        key={tier.id}
-                        onClick={() => handleTierChange(tier.id)}
-                        className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all duration-300 ${
-                          commissionTier === tier.id 
-                          ? "bg-indigo-50 text-indigo-700 shadow-sm border border-indigo-100" 
-                          : "text-slate-500 hover:text-slate-700"
-                        }`}
-                      >
-                        {tier.label}
-                      </button>
-                    ))}
-                  </div>
-                  <p className="text-[10px] text-slate-400 font-medium ml-1 text-right">Potongan sistem otomatis aktif.</p>
+              </div>
+              
+              <div className="space-y-1.5 pt-2">
+                <label className="text-xs font-bold text-slate-700 ml-1 flex items-center gap-1.5">
+                  <Weight size={14} className="text-indigo-600" /> Kriteria Beban Jasa (Sistem Komisi)
+                </label>
+                <div className="bg-white p-1 rounded-xl flex border border-slate-300">
+                  {[
+                    { id: "ringan", label: "Ringan" },
+                    { id: "sedang", label: "Sedang" },
+                    { id: "berat", label: "Berat" }
+                  ].map((tier) => (
+                    <button
+                      key={tier.id}
+                      onClick={(e) => { e.preventDefault(); handleTierChange(tier.id); }}
+                      className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-all duration-300 ${
+                        commissionTier === tier.id 
+                        ? "bg-indigo-50 text-indigo-700 shadow-sm border border-indigo-100" 
+                        : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"
+                      }`}
+                    >
+                      {tier.label}
+                    </button>
+                  ))}
                 </div>
               </div>
 
@@ -461,7 +536,7 @@ export default function NewOrderPage() {
           
           <div className="bg-white rounded-[1.5rem] p-6 shadow-sm border border-slate-200 sticky top-8">
             <h3 className="text-lg font-bold text-slate-800 mb-5 flex items-center gap-2 border-b border-slate-100 pb-3">
-              <ShieldCheck className="text-blue-600" size={20} /> Penugasan
+              <ShieldCheck className="text-blue-600" size={20} /> Penugasan & Ringkasan
             </h3>
 
             <div className="space-y-6">
@@ -491,7 +566,7 @@ export default function NewOrderPage() {
                   {["QRIS", "Transfer", "Cash"].map((method) => (
                     <button
                       key={method}
-                      onClick={() => setPaymentMethod(method.toLowerCase())}
+                      onClick={(e) => { e.preventDefault(); setPaymentMethod(method.toLowerCase()); }}
                       className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-all duration-300 ${
                         paymentMethod === method.toLowerCase() ? "bg-white text-blue-600 shadow-sm border border-slate-200" : "text-slate-500 hover:text-slate-700"
                       }`}
@@ -536,15 +611,19 @@ export default function NewOrderPage() {
               </div>
 
               <div className="bg-slate-50 rounded-2xl p-5 border border-slate-200 shadow-inner mt-6">
-                <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-1.5"><Calculator size={12} /> Ringkasan Tagihan Pelanggan</p>
+                <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-1.5"><Calculator size={12} /> Rincian Tagihan Pelanggan</p>
                 
                 <div className="space-y-2.5 mb-4 border-b border-dashed border-slate-300 pb-4">
                   <div className="flex justify-between items-center">
-                    <span className="text-xs font-semibold text-slate-500">Subtotal Jasa ({numQty} {unit})</span>
-                    <span className="text-sm font-bold text-slate-700">Rp {subtotalJasa.toLocaleString('id-ID')}</span>
+                    <span className="text-xs font-semibold text-slate-500">Tarif Ongkir ({numQty} {unit})</span>
+                    <span className="text-sm font-bold text-slate-700">Rp {(numShippingFee * numQty).toLocaleString('id-ID')}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-semibold text-slate-500">Tarif Jasa ({numQty} {unit})</span>
+                    <span className="text-sm font-bold text-slate-700">Rp {(numServiceFee * numQty).toLocaleString('id-ID')}</span>
                   </div>
                   {isUrgent && (
-                    <div className="flex justify-between items-center">
+                    <div className="flex justify-between items-center pt-1 border-t border-slate-100">
                       <span className="text-xs font-semibold text-amber-500 flex items-center gap-1"><Flame size={10} /> Biaya Urgent</span>
                       <span className="text-sm font-bold text-amber-600">Rp {numUrgentFee.toLocaleString('id-ID')}</span>
                     </div>
@@ -574,7 +653,7 @@ export default function NewOrderPage() {
                 >
                   {isSubmitting ? (
                     <>
-                      <Clock size={18} className="animate-spin" /> Memproses Data...
+                      <Clock size={18} className="animate-spin" /> Mengunggah Data...
                     </>
                   ) : (
                     <>
