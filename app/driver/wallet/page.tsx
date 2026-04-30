@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { 
   Wallet, ArrowUpRight, ArrowDownToLine, 
   Clock, CheckCircle2, Landmark, History,
-  Banknote, Info, RefreshCw, X, UploadCloud, Camera, ShoppingCart, Calendar, ChevronRight
+  Banknote, Info, RefreshCw, X, UploadCloud, Camera, ShoppingCart, Calendar, AlertTriangle
 } from "lucide-react";
 import { db } from "@/lib/firebase";
 import { collection, addDoc, query, where, getDocs, doc, getDoc } from "firebase/firestore";
@@ -147,7 +147,8 @@ export default function DriverWalletPage() {
             dateGroup,
             time: timeStr,
             status: data.status === "completed" ? "success" : "pending",
-            rawDate: safeRawDate
+            rawDate: safeRawDate,
+            isDeduction: true
           });
         } else if (data.type === 'reimburse') {
           reimburseMap[data.orderId] = data.status; 
@@ -159,6 +160,7 @@ export default function DriverWalletPage() {
       
       let totalDigitalIncome = 0;
       let totalCashNet = 0;
+      let totalPotonganKas = 0; // Total hutang setoran
       let totalPiutangTalangan = 0;
 
       if (result.success) {
@@ -166,6 +168,7 @@ export default function DriverWalletPage() {
 
         completedOrders.forEach((o: any) => {
           const driverNetIncome = getDriverNetIncome(o, currentSettings);
+          const ownerComm = getOwnerCommission(o, currentSettings);
           const talangan = Number(o.shoppingCost) || 0;
           
           const method = o.paymentMethod?.toLowerCase() || 'cash';
@@ -177,6 +180,7 @@ export default function DriverWalletPage() {
           const timeStr = new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit' }).format(safeRawDate) + ' WIB';
           
           if (isDigital) {
+            // PEMBAYARAN DIGITAL: Driver berhak atas uangnya (bertambah di saldo digital)
             totalDigitalIncome += driverNetIncome;
             if (isBelanja) {
               const rStatus = reimburseMap[o.id] || 'none';
@@ -184,32 +188,56 @@ export default function DriverWalletPage() {
                 totalPiutangTalangan += talangan;
               }
             }
+            trxList.push({
+              id: o.id,
+              isWithdrawal: false,
+              invoice: o.invoice,
+              title: o.serviceName,
+              amount: `+ Rp ${formatCurrency(driverNetIncome)}`,
+              dateGroup,
+              time: timeStr,
+              status: "success",
+              method: method,
+              isDigital: isDigital,
+              isBelanja: isBelanja,
+              talangan: talangan,
+              reimburseStatus: reimburseMap[o.id] || 'none', 
+              rawDate: safeRawDate,
+              isDeduction: false
+            });
           } else {
+            // PEMBAYARAN CASH: Uang di tangan Driver, jadi saldo digital DIPOTONG komisi Owner
             totalCashNet += driverNetIncome;
+            totalPotonganKas += ownerComm;
+            
+            trxList.push({
+              id: o.id + '_deduction',
+              isWithdrawal: false,
+              invoice: o.invoice,
+              title: `Potongan Komisi (${o.serviceName})`,
+              amount: `- Rp ${formatCurrency(ownerComm)}`,
+              dateGroup,
+              time: timeStr,
+              status: "success",
+              method: method,
+              isDigital: isDigital,
+              isBelanja: isBelanja,
+              talangan: talangan,
+              reimburseStatus: reimburseMap[o.id] || 'none', 
+              rawDate: safeRawDate,
+              isDeduction: true
+            });
           }
-
-          trxList.push({
-            id: o.id,
-            isWithdrawal: false,
-            invoice: o.invoice,
-            title: o.serviceName,
-            amount: `${isDigital ? '+' : ''} Rp ${formatCurrency(driverNetIncome)}`,
-            dateGroup,
-            time: timeStr,
-            status: "success",
-            method: method,
-            isDigital: isDigital,
-            isBelanja: isBelanja,
-            talangan: talangan,
-            reimburseStatus: reimburseMap[o.id] || 'none', 
-            rawDate: safeRawDate
-          });
         });
       }
 
       trxList.sort((a, b) => b.rawDate - a.rawDate);
 
-      setDigitalBalance(Math.max(0, totalDigitalIncome - totalWithdrawnIncome));
+      // KALKULASI FINAL SALDO DIGITAL (BISA MINUS/HUTANG SETORAN)
+      // = Pemasukan Digital - Potongan Cash - Penarikan Dana
+      const finalBalance = totalDigitalIncome - totalPotonganKas - totalWithdrawnIncome;
+
+      setDigitalBalance(finalBalance);
       setTotalWithdrawn(totalSuccessWithdrawn);
       setCashHakBersih(totalCashNet);
       setPendingReimburse(totalPiutangTalangan);
@@ -298,7 +326,7 @@ export default function DriverWalletPage() {
         driverCode,
         driverName: driverName || driverCode,
         type: "reimburse",
-        orderId: selectedReimburse.id,
+        orderId: selectedReimburse.id.split('_')[0], // Clean ID if it has _deduction
         amount: selectedReimburse.talangan,
         bankName: bankForm.bankName,
         accountNumber: bankForm.accountNumber,
@@ -309,7 +337,7 @@ export default function DriverWalletPage() {
       });
 
       localStorage.setItem("mtm_bank_details", JSON.stringify(bankForm));
-      alert(`Klaim Reimburse untuk Invoice ${selectedReimburse.invoice} berhasil diajukan!`);
+      alert(`Klaim Reimburse berhasil diajukan!`);
       
       setIsReimburseModalOpen(false);
       setSelectedReimburse(null);
@@ -350,9 +378,9 @@ export default function DriverWalletPage() {
         <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 mb-6 flex items-start gap-3 shadow-sm relative animate-in slide-in-from-top-4">
           <Info className="text-blue-500 shrink-0 mt-0.5" size={18} />
           <div className="pr-4">
-            <h4 className="text-xs font-bold text-blue-800 uppercase tracking-widest mb-1">Catatan Keuangan</h4>
+            <h4 className="text-xs font-bold text-blue-800 uppercase tracking-widest mb-1">Catatan Keuangan Otomatis</h4>
             <p className="text-[11px] font-medium text-blue-600 leading-relaxed">
-              Semua nominal di dompet ini adalah murni <strong>Pendapatan Bersih Jasa</strong>. Khusus Uang Talangan Belanja dicatat secara terpisah agar tidak terkena potongan komisi.
+              Jika order dibayar <strong>Cash</strong>, komisi Owner akan otomatis dipotong dari Saldo Anda agar tidak perlu repot transfer manual. Saldo Anda bisa <strong>Minus</strong> jika hutang komisi lebih besar dari saldo digital Anda.
             </p>
           </div>
           <button onClick={() => setShowInfoBanner(false)} className="absolute top-3 right-3 text-blue-400 hover:text-blue-600 p-1 bg-white/50 hover:bg-white rounded-full transition-all">
@@ -361,15 +389,16 @@ export default function DriverWalletPage() {
         </div>
       )}
 
-      {/* KARTU SALDO UTAMA (DIGITAL) */}
-      <div className="bg-gradient-to-br from-slate-800 via-slate-900 to-black rounded-3xl p-6 md:p-8 text-white shadow-xl relative overflow-hidden mb-6 border border-slate-700">
-        <div className="absolute top-0 right-0 w-64 h-64 bg-blue-500/20 rounded-full blur-3xl pointer-events-none -translate-y-1/2 translate-x-1/3"></div>
+      {/* KARTU SALDO UTAMA (DIGITAL) BISA MINUS */}
+      <div className={`rounded-3xl p-6 md:p-8 text-white shadow-xl relative overflow-hidden mb-6 border transition-colors ${digitalBalance < 0 ? 'bg-gradient-to-br from-rose-900 via-rose-950 to-black border-rose-800' : 'bg-gradient-to-br from-slate-800 via-slate-900 to-black border-slate-700'}`}>
+        <div className={`absolute top-0 right-0 w-64 h-64 rounded-full blur-3xl pointer-events-none -translate-y-1/2 translate-x-1/3 ${digitalBalance < 0 ? 'bg-rose-500/20' : 'bg-blue-500/20'}`}></div>
         <div className="absolute bottom-0 left-0 w-48 h-48 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none translate-y-1/3 -translate-x-1/3"></div>
 
         <div className="relative z-10">
           <div className="flex justify-between items-start mb-4">
             <p className="text-xs md:text-sm font-semibold text-slate-300 uppercase tracking-widest flex items-center gap-2">
-              <Landmark size={16} className="text-blue-400"/> Saldo Jasa (Bisa Ditarik)
+              <Landmark size={16} className={digitalBalance < 0 ? "text-rose-400" : "text-blue-400"}/> 
+              {digitalBalance < 0 ? 'Saldo Minus (Hutang Kas)' : 'Saldo Jasa (Bisa Ditarik)'}
             </p>
             {totalWithdrawn > 0 && (
               <div className="text-right">
@@ -380,23 +409,30 @@ export default function DriverWalletPage() {
           </div>
 
           <div className="mb-8 flex items-end">
-            <span className="text-xl text-slate-400 font-medium mr-2 mb-1.5">Rp</span>
-            <h1 className="text-4xl md:text-5xl font-black tracking-tight">
-              {isLoading ? "..." : formatCurrency(digitalBalance)}
+            {digitalBalance < 0 && <span className="text-3xl md:text-4xl text-rose-400 font-black mr-1 mb-0.5">-</span>}
+            <span className={`text-xl font-medium mr-2 mb-1.5 ${digitalBalance < 0 ? 'text-rose-400' : 'text-slate-400'}`}>Rp</span>
+            <h1 className={`text-4xl md:text-5xl font-black tracking-tight ${digitalBalance < 0 ? 'text-rose-400' : ''}`}>
+              {isLoading ? "..." : formatCurrency(Math.abs(digitalBalance))}
             </h1>
           </div>
 
-          <button 
-            onClick={() => {
-              if (digitalBalance <= 0) return alert("Saldo digital Anda Rp 0. Tidak ada dana yang bisa ditarik.");
-              setWithdrawAmount(digitalBalance.toString());
-              setIsWithdrawModalOpen(true);
-            }}
-            disabled={isLoading || digitalBalance <= 0}
-            className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:border-slate-700 disabled:cursor-not-allowed text-white font-bold py-3.5 rounded-xl transition-all active:scale-[0.98] flex items-center justify-center gap-2 text-sm shadow-lg border border-blue-500"
-          >
-            <ArrowDownToLine size={18} /> Tarik Saldo Ke Rekening Anda
-          </button>
+          {digitalBalance < 0 ? (
+            <div className="w-full bg-rose-500/20 text-rose-300 font-bold py-3.5 px-4 rounded-xl flex items-center gap-2 text-sm border border-rose-500/50 backdrop-blur-sm">
+              <AlertTriangle size={18} /> Lakukan order dengan pembayaran Digital untuk melunasi minus.
+            </div>
+          ) : (
+            <button 
+              onClick={() => {
+                if (digitalBalance <= 0) return alert("Saldo digital Anda Rp 0. Tidak ada dana yang bisa ditarik.");
+                setWithdrawAmount(digitalBalance.toString());
+                setIsWithdrawModalOpen(true);
+              }}
+              disabled={isLoading || digitalBalance <= 0}
+              className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:border-slate-700 disabled:cursor-not-allowed text-white font-bold py-3.5 rounded-xl transition-all active:scale-[0.98] flex items-center justify-center gap-2 text-sm shadow-lg border border-blue-500"
+            >
+              <ArrowDownToLine size={18} /> Tarik Saldo Ke Rekening Anda
+            </button>
+          )}
         </div>
       </div>
 
@@ -404,12 +440,12 @@ export default function DriverWalletPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
         <div className="bg-white p-4 md:p-5 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden group hover:border-blue-300 transition-colors">
           <Banknote size={48} className="absolute -bottom-3 -right-3 text-emerald-50 opacity-60 group-hover:scale-110 transition-transform duration-500" />
-          <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1.5">Tunai (Di Tangan)</p>
+          <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1.5">Tunai (Hak Bersih)</p>
           <h4 className="text-xl md:text-2xl font-black text-slate-800 mt-1">
             Rp {isLoading ? "..." : formatCurrency(cashHakBersih)}
           </h4>
           <p className="text-[10px] text-slate-500 font-medium mt-2 bg-slate-50 inline-block px-2 py-1 rounded-md border border-slate-100">
-            Pendapatan masuk via Pembayaran Cash.
+            Nilai di tangan Anda yang sudah dipotong hak Owner.
           </p>
         </div>
         
@@ -420,7 +456,7 @@ export default function DriverWalletPage() {
             Rp {isLoading ? "..." : formatCurrency(pendingReimburse)}
           </h4>
           <p className="text-[10px] text-rose-600 font-medium mt-2 bg-rose-100/50 inline-block px-2 py-1 rounded-md border border-rose-100">
-            Uang pribadi yang mengendap di Owner.
+            Uang pribadi yang belum dicairkan oleh Owner.
           </p>
         </div>
       </div>
@@ -428,7 +464,7 @@ export default function DriverWalletPage() {
       {/* TRANSAKSI MUTASI */}
       <div>
         <h3 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-4 px-1 flex items-center gap-2">
-          <History size={16} className="text-blue-500"/> Riwayat Mutasi & Reimburse
+          <History size={16} className="text-blue-500"/> Riwayat Mutasi Dompet
         </h3>
 
         {isLoading ? (
@@ -456,19 +492,24 @@ export default function DriverWalletPage() {
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3 md:gap-4">
                           <div className={`w-10 h-10 md:w-12 md:h-12 rounded-xl flex items-center justify-center shrink-0 border ${
-                            trx.isWithdrawal ? 'bg-slate-50 border-slate-200 text-slate-600' :
+                            trx.isDeduction ? 'bg-rose-50 border-rose-200 text-rose-600' :
                             trx.method === 'cash' ? 'bg-amber-50 border-amber-100 text-amber-600' : 'bg-emerald-50 border-emerald-100 text-emerald-600'
                           }`}>
-                            {trx.isWithdrawal ? <ArrowDownToLine size={20} /> : 
+                            {trx.isDeduction ? <ArrowDownToLine size={20} /> : 
                              trx.method === 'cash' ? <Banknote size={20} /> : <ArrowUpRight size={20} />}
                           </div>
                           <div>
                             <h4 className="font-bold text-slate-800 text-sm mb-0.5 line-clamp-1 pr-2">{trx.title}</h4>
                             <div className="flex items-center gap-2 mt-1">
                               <span className="text-[10px] font-bold text-slate-400">{trx.time}</span>
-                              {!trx.isWithdrawal && (
+                              {!trx.isWithdrawal && !trx.isDeduction && (
                                 <span className="text-[9px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 uppercase">
-                                  {trx.method === 'cash' ? 'CASH' : 'QRIS/TF'}
+                                  QRIS/TF
+                                </span>
+                              )}
+                              {!trx.isWithdrawal && trx.isDeduction && (
+                                <span className="text-[9px] font-bold text-rose-500 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-100 uppercase">
+                                  POTONGAN CASH
                                 </span>
                               )}
                             </div>
@@ -477,7 +518,7 @@ export default function DriverWalletPage() {
 
                         <div className="text-right shrink-0">
                           <h4 className={`font-black text-sm md:text-base ${
-                            trx.isWithdrawal ? 'text-slate-800' :
+                            trx.isDeduction ? 'text-rose-600' :
                             trx.method === 'cash' ? 'text-amber-600' : 'text-emerald-600'
                           }`}>
                             {trx.amount}
@@ -490,8 +531,8 @@ export default function DriverWalletPage() {
                         </div>
                       </div>
 
-                      {/* KOTAK REIMBURSE */}
-                      {!trx.isWithdrawal && trx.isBelanja && trx.isDigital && trx.talangan > 0 && (
+                      {/* KOTAK REIMBURSE (Hanya tampil di Mutasi Potongan Cash atau Digital jika ada Belanja) */}
+                      {!trx.isWithdrawal && trx.isBelanja && trx.isDigital && !trx.isDeduction && trx.talangan > 0 && (
                         <div className="mt-4 bg-rose-50/60 border border-rose-100 rounded-xl p-3 md:p-4 flex flex-col md:flex-row md:items-center justify-between gap-3">
                           <div>
                             <p className="text-[10px] font-bold text-rose-500 uppercase tracking-widest flex items-center gap-1.5"><ShoppingCart size={12} /> Talangan Anda Terpakai</p>
@@ -517,13 +558,6 @@ export default function DriverWalletPage() {
                               </span>
                             )}
                           </div>
-                        </div>
-                      )}
-
-                      {!trx.isWithdrawal && trx.isBelanja && !trx.isDigital && trx.talangan > 0 && (
-                        <div className="mt-3 bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-[10px] text-slate-500 font-medium flex items-start gap-2">
-                          <Info size={14} className="text-amber-500 shrink-0 mt-0.5" />
-                          <p>Uang talangan sebesar <strong className="text-slate-700">Rp {formatCurrency(trx.talangan)}</strong> sudah Anda terima langsung (Tunai/Cash) dari pelanggan.</p>
                         </div>
                       )}
 

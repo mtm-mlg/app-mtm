@@ -5,10 +5,8 @@ import {
   ArrowRight, Phone, AlertCircle, Wallet, CheckCircle2, User, Camera, 
   UploadCloud, RefreshCw, LogOut, ShoppingCart, FileDown, Send, 
   ExternalLink, MessageCircle, Siren, CloudRain, TrendingUp, Map,
-  Sun, Cloud, Image as ImageIcon
+  Sun, Cloud, Image as ImageIcon, Plus, X
 } from "lucide-react";
-import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
 import { db } from "@/lib/firebase";
 import { doc, getDoc, updateDoc, collection, query, where, getDocs } from "firebase/firestore"; 
 
@@ -70,8 +68,11 @@ export default function DriverDashboard() {
   const [weatherLoading, setWeatherLoading] = useState(false);
 
   const [shoppingInputs, setShoppingInputs] = useState<Record<string, number | "">>({});
-  const [proofFiles, setProofFiles] = useState<Record<string, File | null>>({});
-  const [proofPreviews, setProofPreviews] = useState<Record<string, string | null>>({});
+  
+  // STATE MULTI UPLOAD FOTO BUKTI (Array per order ID)
+  const [proofFiles, setProofFiles] = useState<Record<string, File[]>>({});
+  const [proofPreviews, setProofPreviews] = useState<Record<string, string[]>>({});
+  
   const [processingOrders, setProcessingOrders] = useState<Record<string, boolean>>({});
   const [generatingPDFs, setGeneratingPDFs] = useState<Record<string, boolean>>({});
 
@@ -164,6 +165,9 @@ export default function DriverDashboard() {
     }
   }, [isOnline]);
 
+  // ========================================================
+  // RUMUS PERHITUNGAN
+  // ========================================================
   const getSubtotalJasa = (order: any) => {
     const qty = Number(order.quantity) || 1;
     if (order.basePrice) return Number(order.basePrice) * qty; 
@@ -174,21 +178,16 @@ export default function DriverDashboard() {
     return calc > 0 ? calc : total;
   };
 
-  const getUnitPrice = (order: any) => {
-    if (order.basePrice) return Number(order.basePrice);
-    const sub = getSubtotalJasa(order);
-    const qty = Number(order.quantity) || 1;
-    return sub / qty;
-  };
-
-  const getOwnerCommission = (order: any) => {
+  const getOwnerCommission = (order: any, appSettings: any) => {
     if (order.exactOwnerCommission !== undefined) return order.exactOwnerCommission;
     const base = getSubtotalJasa(order); 
     const tier = order.commissionTier?.toLowerCase() || 'sedang';
     
     let pct = 0.15; 
-    if (settings && settings.commissions && settings.commissions[tier] !== undefined) {
-       pct = (100 - Number(settings.commissions[tier])) / 100;
+    const comms = appSettings?.commissions || appSettings?.commissionTiers;
+
+    if (comms && comms[tier] !== undefined) {
+       pct = (100 - Number(comms[tier])) / 100;
     } else {
        if (tier === 'ringan') pct = 0.16;
        else if (tier === 'sedang') pct = 0.15;
@@ -197,9 +196,9 @@ export default function DriverDashboard() {
     return base * pct;
   };
 
-  const getDriverNetIncome = (order: any) => {
+  const getDriverNetIncome = (order: any, appSettings: any) => {
     const baseJasa = getSubtotalJasa(order);
-    const ownerComm = getOwnerCommission(order);
+    const ownerComm = getOwnerCommission(order, appSettings);
     const urgentFee = Number(order.urgentFee) || 0;
     return (baseJasa - ownerComm) + urgentFee;
   };
@@ -210,12 +209,19 @@ export default function DriverDashboard() {
     setIsLoadingOrder(true);
     setRefreshProgress(0); 
     try {
+      const snapSettings = await getDoc(doc(db, "settings", "global"));
+      let currentSettings = null;
+      if (snapSettings.exists()) {
+        currentSettings = snapSettings.data();
+        setSettings(currentSettings);
+      }
+
       const resOrder = await fetch(`/api/orders`);
       const resultOrder = await resOrder.json();
       
       const resProfile = await fetch("/api/drivers");
       const resultProfile = await resProfile.json();
-      
+
       let myPrefs = { jarak: true, tenaga: true, waktu: true, pikiran: true, belanja: true };
 
       if (resultProfile.success) {
@@ -239,19 +245,37 @@ export default function DriverDashboard() {
       if (resultOrder.success) {
         const allOrders = resultOrder.data;
         
-        const myCompletedOrders = allOrders.filter((o:any) => o.driverCode === driverCode && o.status === 'completed');
+        // MENDAPATKAN TANGGAL HARI INI (FORMAT: YYYY-MM-DD)
+        const today = new Date();
+        const todayString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+
+        // HANYA AMBIL ORDER SELESAI HARI INI
+        const myCompletedOrdersToday = allOrders.filter((o:any) => {
+           if (o.driverCode !== driverCode || o.status !== 'completed') return false;
+           
+           // Cari tanggal penyelesaian (updatedAt) atau pembuatan (createdAt)
+           const dateToCheck = o.updatedAt || o.createdAt;
+           if (!dateToCheck) return false;
+           
+           const orderDate = new Date(dateToCheck);
+           if (isNaN(orderDate.getTime())) return false;
+           
+           const orderDateString = `${orderDate.getFullYear()}-${String(orderDate.getMonth() + 1).padStart(2, '0')}-${String(orderDate.getDate()).padStart(2, '0')}`;
+           return orderDateString === todayString;
+        });
         
-        let calcNetJasa = 0;
-        let calcTalangan = 0;
+        let calcNetJasaToday = 0;
+        let calcTalanganToday = 0;
         
-        myCompletedOrders.forEach((o:any) => {
-          calcNetJasa += getDriverNetIncome(o);
-          calcTalangan += (Number(o.shoppingCost) || 0);
+        myCompletedOrdersToday.forEach((o:any) => {
+          calcNetJasaToday += getDriverNetIncome(o, currentSettings);
+          calcTalanganToday += (Number(o.shoppingCost) || 0);
         });
 
-        setDailyRevenue(calcNetJasa);
-        setTotalReimburse(calcTalangan);
-        setCompletedCount(myCompletedOrders.length);
+        // SET KE STATE (Hanya Data Hari Ini)
+        setDailyRevenue(calcNetJasaToday);
+        setTotalReimburse(calcTalanganToday);
+        setCompletedCount(myCompletedOrdersToday.length);
 
         const myTargets = allOrders.filter((o:any) => {
           const isActiveForMe = o.status === 'active' && o.driverCode === driverCode;
@@ -302,12 +326,38 @@ export default function DriverDashboard() {
     return () => { clearInterval(interval); clearInterval(progInterval); };
   }, [isOnline, driverCode]);
 
+  // ========================================================
+  // FUNGSI MULTI UPLOAD FOTO BUKTI
+  // ========================================================
   const handlePhotoChange = (orderId: string, e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      setProofFiles(prev => ({...prev, [orderId]: file}));
-      setProofPreviews(prev => ({...prev, [orderId]: URL.createObjectURL(file)}));
+    if (e.target.files && e.target.files.length > 0) {
+      const incomingFiles = Array.from(e.target.files);
+      const incomingPreviews = incomingFiles.map(file => URL.createObjectURL(file));
+
+      setProofFiles(prev => {
+        const existingFiles = prev[orderId] || [];
+        return { ...prev, [orderId]: [...existingFiles, ...incomingFiles] };
+      });
+      
+      setProofPreviews(prev => {
+        const existingPreviews = prev[orderId] || [];
+        return { ...prev, [orderId]: [...existingPreviews, ...incomingPreviews] };
+      });
     }
+    e.target.value = '';
+  };
+
+  const removeProofImage = (orderId: string, indexToRemove: number) => {
+    setProofFiles(prev => {
+      const updated = [...(prev[orderId] || [])];
+      updated.splice(indexToRemove, 1);
+      return { ...prev, [orderId]: updated };
+    });
+    setProofPreviews(prev => {
+      const updated = [...(prev[orderId] || [])];
+      updated.splice(indexToRemove, 1);
+      return { ...prev, [orderId]: updated };
+    });
   };
 
   const formatDateTime = (dateString: string) => {
@@ -331,9 +381,9 @@ export default function DriverDashboard() {
     return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
   };
 
-  // ============================================================================
-  // FUNGSI INVOICE DENGAN PERBAIKAN BUG PDF KOSONG DAN QRIS DINAMIS
-  // ============================================================================
+  // ========================================================
+  // INVOICE GENERATOR (REVISI HD NATIVE PRINT + LAYOUT BARU)
+  // ========================================================
   const handleGenerateInvoice = async (order: any, sendWa: boolean) => {
     if (!settings) { alert("Sedang memuat pengaturan. Mohon tunggu."); return; }
     
@@ -343,8 +393,6 @@ export default function DriverDashboard() {
     }
     
     setGeneratingPDFs(prev => ({...prev, [order.id]: true}));
-    
-    let invoiceElement: HTMLDivElement | null = null;
 
     try {
       const config = settings.invoiceConfig || {};
@@ -352,258 +400,322 @@ export default function DriverDashboard() {
       const companyInfo = settings.companyInfo || {};
       
       const qty = Number(order.quantity) || 1;
-      const subtotalJasa = getSubtotalJasa(order);
+      const numTalangan = currentShoppingInput; // Ambil nilai state terbaru
       const urgentFee = Number(order.urgentFee) || 0;
-      
-      // INI ADALAH TOTAL YANG AKAN DISISIPKAN KE QRIS
-      const currentTotal = subtotalJasa + currentShoppingInput + urgentFee;
 
+      // LOGIKA BARU: Ongkir dikali qty. Tarif Jasa TETAP.
       const shippingFee = Number(order.shippingFee) || 0;
       const serviceFee = Number(order.serviceFee) || 0;
+      
+      let totalOngkir = 0;
+      let totalJasa = 0;
       const isSplitFormat = shippingFee > 0 || serviceFee > 0;
 
-      // PROSES QRIS DINAMIS
+      if (isSplitFormat) {
+          totalOngkir = shippingFee * qty; // Ongkir dikalikan jumlah/KM
+          totalJasa = serviceFee;          // Jasa DIBIARKAN FLAT
+      } else {
+          // Fallback jika order versi lama
+          totalJasa = getSubtotalJasa(order); 
+      }
+      
+      const currentTotal = totalOngkir + totalJasa + numTalangan + urgentFee;
+
+      const displayDate = order.createdAt && !isNaN(new Date(order.createdAt).getTime()) 
+        ? new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(order.createdAt)) + ' WIB'
+        : new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date()) + ' WIB';
+
       let finalQrisLink = "";
       if (config.showQris && payInfo.qrisUrl) {
          const theQrisPayload = generateDynamicQris(payInfo.qrisUrl, currentTotal);
          finalQrisLink = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(theQrisPayload)}`;
       }
 
-      invoiceElement = document.createElement("div");
-      
-      // PERBAIKAN BUG: Gunakan Z-Index di belakang viewport ketimbang membuangnya ke koordinat -9999px
-      // sehingga html2canvas di perangkat Mobile tetap bisa membacanya sebagai "elemen yang ada".
-      invoiceElement.style.cssText = "position:fixed; top:0; left:0; width:800px; background:white; color:black; font-family:'Bookman Old Style', Georgia, serif; padding:40px; z-index:-1000; opacity: 1; overflow: hidden;";
-      
-      invoiceElement.innerHTML = `
-        ${config.showLogo ? `
-          <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 24px; padding-bottom: 12px; border-bottom: 2px solid black;">
-            <div style="flex: 1; padding-right: 16px; padding-bottom: 4px;">
-              <h1 style="font-size: 32px; font-weight: 900; letter-spacing: -1px; margin: 0 0 4px 0;">INVOICE</h1>
-              <h2 style="font-size: 14px; font-weight: bold; margin: 0 0 2px 0;">${companyInfo.name || "Nama Perusahaan"}</h2>
-              ${companyInfo.address ? `<p style="margin: 2px 0 0 0; font-size: 11px; line-height: 1.2;">${companyInfo.address}</p>` : ''}
-              ${companyInfo.phone ? `<p style="margin: 2px 0 0 0; font-size: 11px; line-height: 1.2;">No. Telp : ${companyInfo.phone}</p>` : ''}
-            </div>
-            ${companyInfo.logoUrl ? `
-              <img src="${companyInfo.logoUrl}" style="height: 80px; width: auto; max-width: 150px; object-fit: contain; flex-shrink: 0; margin-bottom: -10px;" alt="Logo" crossorigin="anonymous" />
-            ` : ''}
-          </div>
-        ` : ''}
-
-        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 32px; font-size: 11px;">
-          <div style="width: 48%;">
-            <p style="font-weight: bold; font-size: 12px; margin: 0 0 8px 0;">Ditagihkan Kepada :</p>
-            <table style="width: 100%; border-collapse: collapse;">
-              <tbody>
-                <tr><td style="width: 80px; vertical-align: top; padding: 2px 0;">Nama</td><td style="width: 10px; vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: 600; vertical-align: top; padding: 2px 0;">${order.customerName}</td></tr>
-                <tr><td style="vertical-align: top; padding: 2px 0;">No. WhatsApp</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="vertical-align: top; padding: 2px 0;">${order.customerPhone}</td></tr>
-                <tr><td style="vertical-align: top; padding: 2px 0;">Alamat</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="vertical-align: top; padding: 2px 0; line-height: 1.3;">${order.customerAddress || "-"}</td></tr>
-              </tbody>
-            </table>
-          </div>
-          
-          <div style="width: 48%;">
-            <table style="width: 100%; border-collapse: collapse; margin-bottom: 12px;">
-              <tbody>
-                <tr><td style="width: 90px; vertical-align: top; font-weight: bold; padding: 2px 0;">Nomor Invoice</td><td style="width: 10px; vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: bold; color: #1d4ed8; vertical-align: top; padding: 2px 0;">${order.invoice}</td></tr>
-                <tr><td style="vertical-align: top; font-weight: bold; padding: 2px 0;">Tanggal</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="vertical-align: top; padding: 2px 0;">${formatDateTime(order.createdAt)}</td></tr>
-              </tbody>
-            </table>
-            <p style="font-weight: bold; font-size: 12px; margin: 0 0 6px 0;">Identitas Driver :</p>
-            <table style="width: 100%; border-collapse: collapse;">
-              <tbody>
-                <tr><td style="width: 90px; vertical-align: top; padding: 2px 0;">Nama</td><td style="width: 10px; vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: 600; vertical-align: top; padding: 2px 0;">${driverName}</td></tr>
-                <tr><td style="vertical-align: top; padding: 2px 0;">No. WhatsApp</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="vertical-align: top; padding: 2px 0;">${driverPhone}</td></tr>
-                <tr><td style="vertical-align: top; padding: 2px 0;">No. Polisi</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="vertical-align: top; padding: 2px 0;">${driverVehicle}</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <table style="width: 100%; text-align: left; border-collapse: collapse; margin-bottom: 32px; font-size: 11px; border-top: 2px solid black; border-bottom: 2px solid black;">
-          <thead>
-            <tr style="border-bottom: 2px solid black;">
-              <th style="padding: 10px 8px; font-weight: bold; width: 45%; border-right: 1px solid #cbd5e1; text-align: center;">Deskripsi Jasa</th>
-              <th style="padding: 10px 8px; text-align: center; font-weight: bold; width: 15%; border-right: 1px solid #cbd5e1;">QTY</th>
-              <th style="padding: 10px 8px; text-align: center; font-weight: bold; width: 20%; border-right: 1px solid #cbd5e1;">Tarif</th>
-              <th style="padding: 10px 8px; text-align: center; font-weight: bold; width: 20%;">Sub-Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${isSplitFormat ? `
-              ${shippingFee > 0 ? `
-              <tr style="border-bottom: 1px solid rgba(0,0,0,0.2);">
-                <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">Ongkos Kirim</td>
-                <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">${qty} ${order.unit || 'KM'}</td>
-                <td style="padding: 12px 8px; text-align: right; vertical-align: top; border-right: 1px solid #cbd5e1;">Rp ${formatCurrency(shippingFee)}</td>
-                <td style="padding: 12px 8px; text-align: right; vertical-align: top;">Rp ${formatCurrency(shippingFee * qty)}</td>
-              </tr>` : ''}
-
-              ${serviceFee > 0 ? `
-              <tr style="border-bottom: 1px solid rgba(0,0,0,0.2);">
-                <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">
-                  "${order.serviceName}"
-                  ${order.serviceDetails ? `<div style="font-size: 9px; color: #475569; margin-top: 4px; white-space: pre-wrap; line-height: 1.3;">${order.serviceDetails}</div>` : ''}
-                </td>
-                <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">${qty} ${order.unit || 'Ls'}</td>
-                <td style="padding: 12px 8px; text-align: right; vertical-align: top; border-right: 1px solid #cbd5e1;">Rp ${formatCurrency(serviceFee)}</td>
-                <td style="padding: 12px 8px; text-align: right; vertical-align: top;">Rp ${formatCurrency(serviceFee * qty)}</td>
-              </tr>` : ''}
-            ` : `
-              <tr style="border-bottom: 1px solid rgba(0,0,0,0.2);">
-                <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">
-                  "${order.serviceName}"
-                  ${order.serviceDetails ? `<div style="font-size: 9px; color: #475569; margin-top: 4px; white-space: pre-wrap; line-height: 1.3;">${order.serviceDetails}</div>` : ''}
-                </td>
-                <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">${qty} ${order.unit || 'Ls'}</td>
-                <td style="padding: 12px 8px; text-align: right; vertical-align: top; border-right: 1px solid #cbd5e1;">Rp ${formatCurrency(getUnitPrice(order))}</td>
-                <td style="padding: 12px 8px; text-align: right; vertical-align: top;">Rp ${formatCurrency(subtotalJasa)}</td>
-              </tr>
-            `}
-
-            ${currentShoppingInput > 0 ? `
-            <tr style="border-bottom: 1px solid rgba(0,0,0,0.2);">
-              <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">"Barang Belanjaan (Talangan)"</td>
-              <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">1 Ls</td>
-              <td style="padding: 12px 8px; text-align: right; vertical-align: top; border-right: 1px solid #cbd5e1;">Rp ${formatCurrency(currentShoppingInput)}</td>
-              <td style="padding: 12px 8px; text-align: right; vertical-align: top;">Rp ${formatCurrency(currentShoppingInput)}</td>
-            </tr>` : ''}
-            
-            ${urgentFee > 0 ? `
-            <tr style="border-bottom: 2px solid black;">
-              <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">Biaya Urgent</td>
-              <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">1 Ls</td>
-              <td style="padding: 12px 8px; text-align: right; vertical-align: top; border-right: 1px solid #cbd5e1;">Rp ${formatCurrency(urgentFee)}</td>
-              <td style="padding: 12px 8px; text-align: right; vertical-align: top;">Rp ${formatCurrency(urgentFee)}</td>
-            </tr>` : ''}
-
-            <tr>
-              <td colspan="3" style="padding: 16px 8px; text-align: right; font-weight: bold; font-size: 12px; border-right: 1px solid #cbd5e1;">TOTAL TAGIHAN</td>
-              <td style="padding: 16px 8px; text-align: right; font-weight: 900; font-size: 13px;">Rp ${formatCurrency(currentTotal)}</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-top: 32px; padding-top: 8px;">
-          
-          <div style="width: 50%;">
-            ${config.showBank ? `
-              <div>
-                <p style="font-weight: bold; font-size: 12px; margin: 0 0 12px 0;">Pembayaran :</p>
-                ${payInfo.banks && Array.isArray(payInfo.banks) ? payInfo.banks.map((bank:any) => `
-                  <table style="width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 16px;">
-                    <tbody>
-                      <tr><td style="width: 80px; vertical-align: top; padding: 2px 0;">Nama Bank</td><td style="width: 10px; vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: bold; vertical-align: top; padding: 2px 0;">${bank.bankName || "BANK"}</td></tr>
-                      <tr><td style="vertical-align: top; padding: 2px 0;">No. Rekening</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: bold; vertical-align: top; padding: 2px 0;">${bank.accountNumber || "12345"}</td></tr>
-                      <tr><td style="vertical-align: top; padding: 2px 0;">Atas Nama</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: bold; vertical-align: top; padding: 2px 0;">${bank.accountName || "Pemilik"}</td></tr>
-                    </tbody>
-                  </table>
-                `).join('') : ''}
-              </div>
-            ` : ''}
-          </div>
-          
-          <div style="width: 45%; display: flex; flex-direction: column; align-items: center;">
-            ${config.showQris && finalQrisLink !== "" ? `
-              <div style="text-align: center; margin-bottom: 24px;">
-                <p style="font-weight: bold; font-size: 11px; margin: 0 0 6px 0;">Scan QRIS (Otomatis Rp ${formatCurrency(currentTotal)})</p>
-                <div style="border: 1px solid black; padding: 4px; background: white; display: inline-block;">
-                  <img src="${finalQrisLink}" alt="QRIS Dinamis" style="width: 112px; height: 112px;" crossorigin="anonymous" />
-                </div>
-              </div>
-            ` : ''}
-            
-            <div style="text-align: center; width: 100%; margin-top: 8px;">
-              <p style="font-size: 11px; margin: 0 0 64px 0;">Hormat Saya,</p>
-              <div style="border-bottom: 1px solid black; display: inline-block; min-width: 150px; padding-bottom: 4px; margin: 0 auto;">
-                <p style="font-size: 12px; font-weight: bold; margin: 0; line-height: 1;">${config.signatureName || "Nama Manajer"}</p>
-              </div>
-              <p style="font-size: 10px; color: #334155; margin: 4px 0 0 0;">${config.signatureRole || "Manajemen MTM"}</p>
-            </div>
-          </div>
-        </div>
-
-        <div style="text-align: center; margin-top: 48px; font-size: 10px; font-style: italic; color: #475569; padding: 0 24px;">
-          "${config.footerNote || ''}"
-        </div>
-      `;
-
-      document.body.appendChild(invoiceElement);
-
-      const canvas = await html2canvas(invoiceElement, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
-      const imgData = canvas.toDataURL('image/jpeg', 1.0);
-      const pdf = new jsPDF('p', 'mm', 'a4');
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-      pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
-      
+      // ==========================================
+      // FORMAT WHATSAPP (SEIRAMA DENGAN PDF)
+      // ==========================================
       if (sendWa) {
         const waNum = formatWa(order.customerPhone);
-        let rincian = "";
         
-        if (isSplitFormat) {
-           if (shippingFee > 0) rincian += `*Ongkir:* Rp ${formatCurrency(shippingFee * qty)}\n`;
-           if (serviceFee > 0) rincian += `*Jasa Khusus:* Rp ${formatCurrency(serviceFee * qty)}`;
-        } else {
-           rincian = `*Ongkir/Jasa:* Rp ${formatCurrency(subtotalJasa)}`;
+        let rincian = "";
+        if (totalOngkir > 0) rincian += `• Ongkos Kirim (${qty} ${order.unit || 'KM'}): Rp ${formatCurrency(totalOngkir)}\n`;
+        if (totalJasa > 0) rincian += `• Tarif Jasa (${order.serviceName}): Rp ${formatCurrency(totalJasa)}\n`;
+        if (numTalangan > 0) rincian += `• Barang Belanjaan (Talangan): Rp ${formatCurrency(numTalangan)}\n`;
+        if (urgentFee > 0) rincian += `• Biaya Urgent/Prioritas: Rp ${formatCurrency(urgentFee)}\n`;
+
+        let bankInfo = "";
+        if (config.showBank && payInfo.banks && Array.isArray(payInfo.banks)) {
+           bankInfo = "\n*💳 Informasi Pembayaran:*\n" + payInfo.banks.map((b:any) => `${b.bankName} - ${b.accountNumber} (a/n ${b.accountName})`).join('\n');
         }
 
-        if (currentShoppingInput > 0) rincian += `\n*Talangan:* Rp ${formatCurrency(currentShoppingInput)}`;
-        if (urgentFee > 0) rincian += `\n*Urgent:* Rp ${formatCurrency(urgentFee)}`;
-
-        const pesan = `*INVOICE TAGIHAN MTM*\nYth. ${order.customerName},\n\n*Invoice:* ${order.invoice}\n*Layanan:* ${order.serviceName}\n*Driver:* ${driverName}\n\n${rincian}\n------------------------\n*TOTAL TAGIHAN:* Rp ${formatCurrency(currentTotal)}\n\nTerima kasih! 🙏`;
+        const pesan = `*INVOICE TAGIHAN MTM* 📄\n\n*No. Invoice:* ${order.invoice}\n*Tanggal:* ${displayDate}\n\n*👤 Ditagihkan Kepada:*\nNama: ${order.customerName}\nNo. WA: ${order.customerPhone}\nAlamat: ${order.customerAddress || "-"}\n\n*🛵 Identitas Driver:*\nNama: ${driverName}\nKendaraan: ${driverVehicle}\n\n*📋 RINCIAN TAGIHAN:*\n${rincian}\n----------------------------------\n*TOTAL TAGIHAN: Rp ${formatCurrency(currentTotal)}* \n${bankInfo}\n\n_${config.footerNote || 'Terima kasih telah mempercayakan layanan Anda kepada MTM. Harap simpan nota ini sebagai bukti pembayaran yang sah.'}_`;
+        
         window.open(`https://wa.me/${waNum}?text=${encodeURIComponent(pesan)}`, '_blank');
-      } else {
-        pdf.save(`Invoice_${order.invoice}.pdf`);
+        setGeneratingPDFs(prev => ({...prev, [order.id]: false}));
+        return;
       }
 
-    } catch (error) { alert("Gagal memproses PDF Invoice. Pastikan sinyal internet stabil."); } finally { 
-      if (invoiceElement && document.body.contains(invoiceElement)) {
-        document.body.removeChild(invoiceElement);
+      // ==========================================
+      // HTML PDF BROWSER PRINT (HD TEXT BASED)
+      // ==========================================
+      const htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Invoice_${order.invoice}</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            @import url('https://fonts.googleapis.com/css2?family=Merriweather:wght@400;700;900&display=swap');
+            @page { size: A4 portrait; margin: 15mm; }
+            body { 
+              font-family: 'Merriweather', Georgia, serif; 
+              color: #0f172a; 
+              margin: 0; 
+              padding: 10px 20px; 
+              font-size: 13px; 
+              -webkit-print-color-adjust: exact; 
+              print-color-adjust: exact;
+            }
+            * { box-sizing: border-box; }
+            
+            /* HEADER */
+            .header-container { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 3px solid #1e3a8a; padding-bottom: 15px; margin-bottom: 25px; }
+            .invoice-title { color: #1e3a8a; font-size: 38px; margin: 0 0 5px 0; font-weight: 900; letter-spacing: 1px; }
+            .company-name { font-size: 16px; font-weight: 800; margin: 0 0 4px 0; color: #000; }
+            .company-info { font-size: 11px; margin: 2px 0; color: #334155; }
+            
+            /* IDENTITY SECTIONS (Req 3 Layout) */
+            .info-wrapper { display: flex; justify-content: space-between; margin-bottom: 30px; }
+            .col-left { width: 48%; }
+            .col-right { width: 48%; }
+            
+            .info-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+            .info-table td { padding: 4px 0; vertical-align: top; }
+            .info-table .label { width: 100px; color: #334155; font-weight: 700; }
+            .info-table .colon { width: 15px; font-weight: 700; }
+            .info-table .val { font-weight: 700; color: #000; }
+            
+            .section-header { font-weight: 800; font-size: 14px; color: #000; margin-bottom: 10px; padding-bottom: 4px; border-bottom: 2px solid #e2e8f0; }
+            
+            /* ITEM TABLE (Req 1 & 6) */
+            .items-table { width: 100%; border-collapse: collapse; margin-bottom: 40px; }
+            .items-table th { background-color: #f8fafc; color: #000; padding: 12px; text-align: left; border-top: 2px solid #1e3a8a; border-bottom: 2px solid #1e3a8a; font-size: 13px; font-weight: 800; }
+            .items-table th.right, .items-table td.right { text-align: right; }
+            .items-table td { padding: 14px 12px; border-bottom: 1px solid #cbd5e1; color: #0f172a; font-size: 13px; }
+            
+            .item-title { font-weight: 700; color: #000; margin-bottom: 4px; }
+            .item-desc { font-size: 11px; color: #475569; }
+            .item-note { font-size: 11px; color: #64748b; font-style: italic; margin-top: 4px; }
+            
+            .total-row td { padding: 16px 12px; border-bottom: 3px solid #1e3a8a; background-color: #f1f5f9; }
+            .total-label { font-weight: 800; font-size: 14px; color: #000; }
+            .total-value { font-weight: 900; font-size: 18px; color: #1e3a8a; }
+            
+            /* FOOTER PAYMENT */
+            .bottom-container { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 100px; }
+            .payment-box { width: 50%; }
+            .sign-box { width: 45%; text-align: center; }
+            .qris-img { width: 120px; height: 120px; border: 1px solid #cbd5e1; padding: 4px; border-radius: 6px; }
+            
+            /* ABSOLUTE BOTTOM FOOTER (Req 4) */
+            .page-footer { position: fixed; bottom: 0; left: 0; right: 0; text-align: center; font-style: italic; color: #64748b; font-size: 11px; border-top: 1px dashed #cbd5e1; padding-top: 10px; }
+          </style>
+        </head>
+        <body>
+          <div class="header-container">
+            <div>
+              <h1 class="invoice-title">INVOICE</h1>
+              <h2 class="company-name">${companyInfo.name || "Just Call Me - Mas Tulung Mas Kota Malang"}</h2>
+              ${companyInfo.address ? `<p class="company-info">${companyInfo.address}</p>` : ''}
+              ${companyInfo.phone ? `<p class="company-info">No. Telp : ${companyInfo.phone}</p>` : ''}
+            </div>
+            <div>
+              ${companyInfo.logoUrl ? `<img src="${companyInfo.logoUrl}" style="height: 80px; object-fit: contain;" />` : ''}
+            </div>
+          </div>
+
+          <div class="info-wrapper">
+            <!-- Kolom Kiri -->
+            <div class="col-left">
+              <table class="info-table" style="margin-bottom: 25px;">
+                <tr><td class="label">Nomor Invoice</td><td class="colon">:</td><td class="val" style="color: #1e3a8a;">${order.invoice}</td></tr>
+                <tr><td class="label">Tanggal</td><td class="colon">:</td><td class="val" style="font-weight: 500;">${displayDate}</td></tr>
+              </table>
+              
+              <div class="section-header">Ditagihkan Kepada :</div>
+              <table class="info-table">
+                <tr><td class="label">Nama</td><td class="colon">:</td><td class="val">${order.customerName}</td></tr>
+                <tr><td class="label">No. WhatsApp</td><td class="colon">:</td><td class="val" style="font-weight: 500;">${order.customerPhone}</td></tr>
+                <tr><td class="label">Alamat</td><td class="colon">:</td><td class="val" style="font-weight: 500; line-height: 1.4;">${order.customerAddress || "-"}</td></tr>
+              </table>
+            </div>
+
+            <!-- Kolom Kanan -->
+            <div class="col-right">
+              <div class="section-header" style="margin-top: 54px;">Identitas Driver :</div>
+              <table class="info-table">
+                <tr><td class="label">Nama</td><td class="colon">:</td><td class="val">${driverName}</td></tr>
+                <tr><td class="label">No. WhatsApp</td><td class="colon">:</td><td class="val" style="font-weight: 500;">${driverPhone}</td></tr>
+                <tr><td class="label">No. Polisi</td><td class="colon">:</td><td class="val" style="font-weight: 500;">${driverVehicle}</td></tr>
+              </table>
+            </div>
+          </div>
+
+          <table class="items-table">
+            <thead>
+              <tr>
+                <th>Deskripsi Jasa</th>
+                <th class="right" style="width: 180px;">Sub-Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${totalOngkir > 0 ? `
+              <tr>
+                <td>
+                  <div class="item-title">Ongkos Kirim</div>
+                  <div class="item-desc">Jarak Tempuh: ${qty} ${order.unit || 'KM'}</div>
+                </td>
+                <td class="right val">Rp ${formatCurrency(totalOngkir)}</td>
+              </tr>` : ''}
+
+              ${totalJasa > 0 ? `
+              <tr>
+                <td>
+                  <div class="item-title">"${order.serviceName}"</div>
+                  <div class="item-desc">Tarif Jasa Pokok / Tambahan</div>
+                  ${order.serviceDetails ? `<div class="item-note">${order.serviceDetails}</div>` : ''}
+                </td>
+                <td class="right val">Rp ${formatCurrency(totalJasa)}</td>
+              </tr>` : ''}
+
+              ${numTalangan > 0 ? `
+              <tr>
+                <td>
+                  <div class="item-title">"Barang Belanjaan (Talangan)"</div>
+                </td>
+                <td class="right val">Rp ${formatCurrency(numTalangan)}</td>
+              </tr>` : ''}
+              
+              ${urgentFee > 0 ? `
+              <tr>
+                <td>
+                  <div class="item-title">Biaya Urgent / Prioritas</div>
+                </td>
+                <td class="right val">Rp ${formatCurrency(urgentFee)}</td>
+              </tr>` : ''}
+
+              <tr class="total-row">
+                <td class="right total-label">TOTAL TAGIHAN</td>
+                <td class="right total-value">Rp ${formatCurrency(currentTotal)}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="bottom-container">
+            <div class="payment-box">
+              ${config.showBank ? `
+                <div class="section-header" style="text-decoration: underline; border: none; margin-bottom: 15px;">Pembayaran :</div>
+                ${payInfo.banks && Array.isArray(payInfo.banks) ? payInfo.banks.map((bank:any) => `
+                  <table class="info-table" style="margin-bottom: 12px; font-size: 11px;">
+                    <tr><td class="label" style="width: 80px; font-weight: 500;">Nama Bank</td><td class="colon">:</td><td class="val">${bank.bankName || 'BANK'}</td></tr>
+                    <tr><td class="label" style="width: 80px; font-weight: 500;">No. Rekening</td><td class="colon">:</td><td class="val">${bank.accountNumber || '-'}</td></tr>
+                    <tr><td class="label" style="width: 80px; font-weight: 500;">Atas Nama</td><td class="colon">:</td><td class="val">${bank.accountName || '-'}</td></tr>
+                  </table>
+                `).join('') : ''}
+              ` : ''}
+            </div>
+            
+            <div class="sign-box">
+              ${config.showQris && finalQrisLink !== "" ? `
+                <div style="margin-bottom: 20px;">
+                  <img src="${finalQrisLink}" alt="QRIS Dinamis" class="qris-img" crossorigin="anonymous" />
+                </div>
+              ` : ''}
+              
+              <div>
+                <p style="margin: 0 0 50px 0; color: #334155; font-size: 12px;">Hormat Saya,</p>
+                <p style="font-weight: 800; font-size: 13px; margin: 0; color: #000; border-bottom: 1px solid #000; display: inline-block; padding-bottom: 2px;">${config.signatureName || "Manajemen MTM"}</p>
+                <p style="font-size: 10px; color: #64748b; margin: 4px 0 0 0;">${config.signatureRole || "Manajemen"}</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="page-footer">
+            "${config.footerNote || 'Terima kasih telah mempercayakan layanan Anda kepada kami. Harap simpan nota ini sebagai bukti pembayaran yang sah.'}"
+          </div>
+
+          <script>
+            window.onload = function() {
+              setTimeout(function() {
+                window.print();
+              }, 400);
+            }
+          </script>
+        </body>
+        </html>
+      `;
+
+      // Buka tab baru untuk print
+      const printWindow = window.open('', '_blank');
+      if (printWindow) {
+        printWindow.document.open();
+        printWindow.document.write(htmlContent);
+        printWindow.document.close();
+      } else {
+        alert("Perhatian: Pop-up diblokir oleh browser Anda. Izinkan pop-up untuk melihat/menyimpan PDF.");
       }
+
+    } catch (error) { 
+      alert("Gagal memproses PDF Invoice. Pastikan sinyal internet stabil."); 
+    } finally { 
       setGeneratingPDFs(prev => ({...prev, [order.id]: false})); 
     }
   };
 
-  // =====================================================================
-  // FUNGSI SELESAIKAN PEKERJAAN (UPDATE STATUS DRIVER DI-PERBAIKI)
-  // =====================================================================
   const handleOrderStatus = async (order: any, newStatus: string) => {
     const currentShoppingInput = Number(shoppingInputs[order.id]) || 0;
-    const currentProofFile = proofFiles[order.id];
+    const currentProofFiles = proofFiles[order.id] || [];
 
-    if (newStatus === 'completed' && !currentProofFile) return alert("Harap unggah foto bukti!");
+    if (newStatus === 'completed' && currentProofFiles.length === 0) return alert("Harap unggah minimal 1 foto bukti!");
     const isBelanja = order.category?.includes('Belanja');
     if (newStatus === 'completed' && isBelanja && currentShoppingInput === 0) return alert("Wajib isi Nominal Uang Talangan Belanja!");
 
     setProcessingOrders(prev => ({...prev, [order.id]: true}));
-    let uploadedProofUrl = null;
+    
+    let uploadedProofUrls: string[] = [];
 
     try {
-      if (newStatus === 'completed' && currentProofFile) {
-        const formData = new FormData();
-        formData.append("file", currentProofFile);
-        formData.append("upload_preset", "mtm-mlg");
+      // MULTI UPLOAD LOOPING
+      if (newStatus === 'completed' && currentProofFiles.length > 0) {
+        const uploadPromises = currentProofFiles.map(async (file) => {
+          const formData = new FormData();
+          formData.append("file", file);
+          formData.append("upload_preset", "mtm-mlg");
 
-        const cloudinaryRes = await fetch(`https://api.cloudinary.com/v1_1/dwprlhbzb/image/upload`, { method: "POST", body: formData });
-        const cloudinaryData = await cloudinaryRes.json();
-        if (cloudinaryData.secure_url) uploadedProofUrl = cloudinaryData.secure_url;
+          const cloudinaryRes = await fetch(`https://api.cloudinary.com/v1_1/dwprlhbzb/image/upload`, { method: "POST", body: formData });
+          const cloudinaryData = await cloudinaryRes.json();
+          return cloudinaryData.secure_url;
+        });
+
+        const results = await Promise.all(uploadPromises);
+        uploadedProofUrls = results.filter(url => url !== undefined);
       }
 
       const subtotalJasa = getSubtotalJasa(order);
       const urgentFee = order.urgentFee || 0;
       const newTotalPrice = subtotalJasa + currentShoppingInput + urgentFee;
 
-      // 1. UPDATE PESANAN
       const orderRef = doc(db, "orders", order.id);
       const updateData: any = { status: newStatus, driverCode: driverCode };
       
       if (newStatus === 'completed') {
-         updateData.proofUrl = uploadedProofUrl;
+         updateData.proofUrls = uploadedProofUrls;
+         if (uploadedProofUrls.length > 0) {
+           updateData.proofUrl = uploadedProofUrls[0]; 
+         }
          updateData.shoppingCost = currentShoppingInput;
          updateData.totalPrice = newTotalPrice;
          
-         // 2. PERBAIKAN: CARI DOKUMEN DRIVER BERDASARKAN FIELD 'code'
          try {
            const driverQuery = query(collection(db, "drivers"), where("code", "==", driverCode));
            const driverSnap = await getDocs(driverQuery);
@@ -684,13 +796,17 @@ export default function DriverDashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         
         <div className="lg:col-span-4 space-y-6">
-          <div className="bg-slate-900 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[220px]">
-            <div className="absolute -top-10 -right-10 w-32 h-32 bg-blue-500/20 rounded-full blur-2xl"></div>
+          <div className={`rounded-2xl p-6 text-white shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[220px] transition-colors ${dailyRevenue < 0 ? 'bg-rose-900 border border-rose-800' : 'bg-slate-900 border border-slate-800'}`}>
+            <div className={`absolute -top-10 -right-10 w-32 h-32 rounded-full blur-2xl ${dailyRevenue < 0 ? 'bg-rose-500/30' : 'bg-blue-500/20'}`}></div>
             <div>
               <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1.5">
-                <Wallet size={14} /> Saldo Jasa (Bersih)
+                <Wallet size={14} /> 
+                {dailyRevenue < 0 ? 'Saldo Minus (Hutang Kas)' : 'Pendapatan Hari Ini'}
               </p>
-              <h1 className="text-3xl md:text-4xl font-bold text-white mb-2 tracking-tight">Rp {formatCurrency(dailyRevenue)}</h1>
+              <h1 className={`text-3xl md:text-4xl font-bold tracking-tight mb-2 ${dailyRevenue < 0 ? 'text-rose-400' : 'text-white'}`}>
+                {dailyRevenue < 0 && <span className="mr-1">-</span>}
+                Rp {formatCurrency(Math.abs(dailyRevenue))}
+              </h1>
               
               {totalReimburse > 0 && (
                 <div className="bg-slate-800/80 border border-slate-700 rounded-lg p-3 mt-3 inline-block w-full max-w-[250px]">
@@ -700,7 +816,7 @@ export default function DriverDashboard() {
               )}
             </div>
             
-            <div className="flex items-center gap-5 border-t border-slate-700/50 pt-4 mt-4">
+            <div className="flex items-center gap-5 border-t border-slate-700/50 pt-4 mt-4 relative z-10">
               <div><p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider mb-1">Tugas Selesai</p><p className="text-base font-semibold flex items-center gap-1.5"><ShieldCheck size={14} className="text-blue-400"/> {completedCount}</p></div>
               <div className="w-px h-8 bg-slate-700"></div>
               <div><p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider mb-1">Status</p><p className="text-base font-semibold text-emerald-400">Aktif</p></div>
@@ -779,8 +895,8 @@ export default function DriverDashboard() {
                 const currentShoppingInput = Number(shoppingInputs[order.id]) || 0;
                 const isProc = processingOrders[order.id] || false;
                 const isGenPDF = generatingPDFs[order.id] || false;
-                const proofPrev = proofPreviews[order.id];
-                const proofFl = proofFiles[order.id];
+                const currentProofFiles = proofFiles[order.id] || [];
+                const currentPreviews = proofPreviews[order.id] || [];
 
                 return (
                   <div key={order.id} className={`rounded-2xl border bg-white shadow-sm overflow-hidden animate-in slide-in-from-bottom-4 duration-300 ${order.status === 'pending' ? 'border-amber-300' : 'border-emerald-400'}`}>
@@ -797,7 +913,7 @@ export default function DriverDashboard() {
                           </div>
                           <h4 className="font-bold text-lg text-slate-800 leading-snug">{order.serviceName}</h4>
                           
-                          {/* JIKA PELANGGAN MENGIRIM BANYAK GAMBAR LAMPIRAN (MULTI-UPLOAD) */}
+                          {/* JIKA PELANGGAN MENGIRIM BANYAK GAMBAR LAMPIRAN (MULTI-UPLOAD) DARI ADMIN */}
                           {order.jobImageUrls && order.jobImageUrls.length > 0 && (
                             <div className="mt-3 mb-3">
                               <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 flex items-center gap-1">
@@ -888,7 +1004,7 @@ export default function DriverDashboard() {
                         
                         <div className="sm:text-right bg-slate-50 p-4 rounded-xl border border-slate-200 sm:min-w-[180px] shrink-0 mt-4 sm:mt-0 h-max">
                           <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Pendapatan Driver (Bersih)</p>
-                          <h3 className="text-2xl font-black text-blue-600 mt-0.5">Rp {formatCurrency(getDriverNetIncome(order))}</h3>
+                          <h3 className="text-2xl font-black text-blue-600 mt-0.5">Rp {formatCurrency(getDriverNetIncome(order, settings))}</h3>
                           
                           <div className="mt-2.5 pt-2 border-t border-slate-200">
                             <p className="text-[10px] font-semibold text-slate-500 uppercase">Tagihan Pelanggan:</p>
@@ -916,20 +1032,34 @@ export default function DriverDashboard() {
                         </div>
                       )}
 
+                      {/* BLOK UPLOAD BUKTI FOTO (MULTI UPLOAD) */}
                       {order.status === 'active' && (
                         <div className="mb-5 p-4 bg-slate-50 rounded-xl border border-slate-200 text-center">
-                          <h4 className="text-xs font-semibold text-slate-600 mb-2.5 flex items-center justify-center gap-1.5"><Camera size={14} /> Foto Bukti Selesai</h4>
-                          {proofPrev ? (
-                            <div className="relative inline-block">
-                              <img src={proofPrev} alt="Bukti" className="h-32 object-contain rounded-lg border border-slate-300" />
-                              <button onClick={() => { setProofFiles(prev => { const n = {...prev}; delete n[order.id]; return n; }); setProofPreviews(prev => { const n = {...prev}; delete n[order.id]; return n; }); }} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1 shadow-sm"><AlertCircle size={14} /></button>
-                            </div>
-                          ) : (
-                            <label className="cursor-pointer bg-white border border-slate-300 hover:border-blue-400 text-blue-600 font-medium py-3 px-4 rounded-lg flex flex-col items-center justify-center shadow-sm w-full text-xs transition-colors">
-                              <UploadCloud size={20} className="mb-1" /> Buka Kamera
-                              <input type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => handlePhotoChange(order.id, e)} />
-                            </label>
-                          )}
+                          <div className="flex items-center justify-between mb-3 border-b border-slate-200 pb-2">
+                             <h4 className="text-xs font-semibold text-slate-600 flex items-center justify-center gap-1.5"><Camera size={14} /> Foto Bukti Selesai</h4>
+                             {currentPreviews.length > 0 && <span className="text-[10px] text-slate-500 font-medium bg-slate-200 px-2 py-0.5 rounded-full">{currentPreviews.length} Foto</span>}
+                          </div>
+
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                             {/* FOTO-FOTO YANG SUDAH DIPILIH */}
+                             {currentPreviews.map((prev, idx) => (
+                                <div key={idx} className="relative aspect-square">
+                                  <img src={prev} alt="Bukti" className="w-full h-full object-cover rounded-lg border border-slate-300 shadow-sm" />
+                                  <button onClick={() => removeProofImage(order.id, idx)} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1.5 shadow-md hover:bg-rose-600 transition-all active:scale-95">
+                                    <X size={12} strokeWidth={3} />
+                                  </button>
+                                </div>
+                             ))}
+
+                             {/* TOMBOL TAMBAH FOTO (SELALU MUNCUL) */}
+                             <label className="cursor-pointer bg-white border-2 border-slate-300 border-dashed hover:border-blue-400 hover:bg-blue-50/50 text-slate-500 font-medium rounded-xl flex flex-col items-center justify-center shadow-sm text-xs transition-colors aspect-square group">
+                                <div className="bg-slate-50 p-2 rounded-full shadow-sm border border-slate-200 mb-1 group-hover:scale-110 transition-transform">
+                                  <Plus size={20} className="text-blue-500" />
+                                </div>
+                                <span className="text-[10px] font-bold text-slate-500 mt-1">Tambah Foto</span>
+                                <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => handlePhotoChange(order.id, e)} />
+                             </label>
+                          </div>
                         </div>
                       )}
 
@@ -939,7 +1069,7 @@ export default function DriverDashboard() {
                             {isProc ? <Clock className="animate-spin" size={16} /> : "Terima & Klaim Pesanan"} <ArrowRight size={16} />
                           </button>
                         ) : (
-                          <button onClick={() => handleOrderStatus(order, 'completed')} disabled={isProc || !proofFl || (order.category?.includes('Belanja') && currentShoppingInput === 0)} className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold py-3.5 rounded-xl shadow-sm flex items-center justify-center gap-2 active:scale-95 transition-all text-sm">
+                          <button onClick={() => handleOrderStatus(order, 'completed')} disabled={isProc || currentProofFiles.length === 0 || (order.category?.includes('Belanja') && currentShoppingInput === 0)} className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold py-3.5 rounded-xl shadow-sm flex items-center justify-center gap-2 active:scale-95 transition-all text-sm">
                             {isProc ? <><RefreshCw className="animate-spin" size={16} /> Mengunggah...</> : <><CheckCircle2 size={16} /> Selesaikan Pekerjaan</>}
                           </button>
                         )}

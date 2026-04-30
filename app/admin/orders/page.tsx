@@ -6,8 +6,6 @@ import {
 } from "lucide-react";
 import { db } from "@/lib/firebase";
 import { doc, deleteDoc, updateDoc, getDoc } from "firebase/firestore";
-import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
 
 // HELPER UNTUK MENCEGAH PEMBULATAN (MENAMPILKAN DESIMAL JIKA ADA)
 const formatCurrency = (amount: number) => {
@@ -185,9 +183,9 @@ export default function OrderHistoryPage() {
   };
 
   // ========================================================
-  // INVOICE PDF MENGGUNAKAN DESAIN BOOKMAN KLASIK (4 BARIS)
+  // INVOICE GENERATOR (REVISI HD NATIVE PRINT + LAYOUT BARU)
   // ========================================================
-  const handleGenerateInvoice = async (order: any) => {
+  const handleGenerateInvoice = async (order: any, sendWa?: boolean) => {
     if (!settings) return alert("Sedang memuat pengaturan, mohon klik lagi sebentar lagi...");
     setIsGeneratingPDF(order.id);
     
@@ -195,227 +193,260 @@ export default function OrderHistoryPage() {
 
     try {
       const targetDriver = drivers.find(d => d.code === order.driverCode);
-      const driverName = targetDriver ? targetDriver.name : "Belum Ditugaskan";
-      const driverPhone = targetDriver ? targetDriver.phone : "-";
-      const driverVehicle = targetDriver ? targetDriver.vehicle : "-";
+      const currentDriverName = targetDriver ? targetDriver.name : "Belum Ditugaskan";
+      const currentDriverPhone = targetDriver ? targetDriver.phone : "-";
+      const currentDriverVehicle = targetDriver ? targetDriver.vehicle : "-";
 
       const config = settings.invoiceConfig || {};
       const payInfo = settings.paymentInfo || {};
       const companyInfo = settings.companyInfo || {}; 
       
-      const subtotalJasa = getSubtotalJasa(order);
-      const shoppingCost = Number(order.shoppingCost) || 0;
-      const urgentFee = Number(order.urgentFee) || 0;
-      const currentTotal = subtotalJasa + shoppingCost + urgentFee;
-
       const qty = Number(order.quantity) || 1;
+      const numTalangan = Number(order.shoppingCost) || 0;
+      const urgentFee = Number(order.urgentFee) || 0;
+
+      // LOGIKA BARU: Ongkir dikali qty. Tarif Jasa TETAP.
       const shippingFee = Number(order.shippingFee) || 0;
       const serviceFee = Number(order.serviceFee) || 0;
+      
+      let totalOngkir = 0;
+      let totalJasa = 0;
       const isSplitFormat = shippingFee > 0 || serviceFee > 0;
 
-      // ==========================================
-      // PEMBUATAN LINK QRIS DINAMIS
-      // ==========================================
+      if (isSplitFormat) {
+          totalOngkir = shippingFee * qty; // Ongkir dikalikan jumlah/KM
+          totalJasa = serviceFee;          // Jasa DIBIARKAN FLAT
+      } else {
+          // Fallback jika order versi lama
+          totalJasa = getSubtotalJasa(order); 
+      }
+      
+      const currentTotal = totalOngkir + totalJasa + numTalangan + urgentFee;
+
+      const displayDate = order.createdAt && !isNaN(new Date(order.createdAt).getTime()) 
+        ? new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(order.createdAt)) + ' WIB'
+        : new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date()) + ' WIB';
+
       let finalQrisLink = "";
       if (config.showQris && payInfo.qrisUrl) {
          const theQrisPayload = generateDynamicQris(payInfo.qrisUrl, currentTotal);
          finalQrisLink = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(theQrisPayload)}`;
       }
 
-      invoiceElement = document.createElement("div");
-      
-      // PERBAIKAN BUG PDF BLANK: Gunakan position fixed z-index negatif agar tidak lari ke luar viewport
-      invoiceElement.style.cssText = "position:fixed; top:0; left:0; width:800px; background:white; color:black; font-family:'Bookman Old Style', Georgia, serif; padding:40px; z-index:-1000; opacity: 1; overflow: hidden;";
-      
-      invoiceElement.innerHTML = `
-        ${config.showLogo ? `
-          <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 24px; padding-bottom: 12px; border-bottom: 2px solid black;">
-            <div style="flex: 1; padding-right: 16px; padding-bottom: 4px;">
-              <h1 style="font-size: 32px; font-weight: 900; letter-spacing: -1px; margin: 0 0 4px 0;">INVOICE</h1>
-              <h2 style="font-size: 14px; font-weight: bold; margin: 0 0 2px 0;">${companyInfo.name || "Nama Perusahaan"}</h2>
-              ${companyInfo.address ? `<p style="margin: 2px 0 0 0; font-size: 11px; line-height: 1.2;">${companyInfo.address}</p>` : ''}
-              ${companyInfo.phone ? `<p style="margin: 2px 0 0 0; font-size: 11px; line-height: 1.2;">No. Telp : ${companyInfo.phone}</p>` : ''}
-            </div>
-            ${companyInfo.logoUrl ? `
-              <img src="${companyInfo.logoUrl}" style="height: 80px; width: auto; max-width: 150px; object-fit: contain; flex-shrink: 0; margin-bottom: -10px;" alt="Logo" crossorigin="anonymous" />
-            ` : ''}
-          </div>
-        ` : ''}
-
-        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 32px; font-size: 11px;">
-          <div style="width: 48%;">
-            <p style="font-weight: bold; font-size: 12px; margin: 0 0 8px 0;">Ditagihkan Kepada :</p>
-            <table style="width: 100%; border-collapse: collapse;">
-              <tbody>
-                <tr><td style="width: 80px; vertical-align: top; padding: 2px 0;">Nama</td><td style="width: 10px; vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: 600; vertical-align: top; padding: 2px 0;">${order.customerName}</td></tr>
-                <tr><td style="vertical-align: top; padding: 2px 0;">No. WhatsApp</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="vertical-align: top; padding: 2px 0;">${order.customerPhone}</td></tr>
-                <tr><td style="vertical-align: top; padding: 2px 0;">Alamat</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="vertical-align: top; padding: 2px 0; line-height: 1.3;">${order.customerAddress || "-"}</td></tr>
-              </tbody>
-            </table>
-          </div>
-          
-          <div style="width: 48%;">
-            <table style="width: 100%; border-collapse: collapse; margin-bottom: 12px;">
-              <tbody>
-                <tr><td style="width: 90px; vertical-align: top; font-weight: bold; padding: 2px 0;">Nomor Invoice</td><td style="width: 10px; vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: bold; color: #1d4ed8; vertical-align: top; padding: 2px 0;">${order.invoice}</td></tr>
-                <tr><td style="vertical-align: top; font-weight: bold; padding: 2px 0;">Tanggal</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="vertical-align: top; padding: 2px 0;">${formatDateSafe(order.createdAt)}</td></tr>
-              </tbody>
-            </table>
-            <p style="font-weight: bold; font-size: 12px; margin: 0 0 6px 0;">Identitas Driver :</p>
-            <table style="width: 100%; border-collapse: collapse;">
-              <tbody>
-                <tr><td style="width: 90px; vertical-align: top; padding: 2px 0;">Nama</td><td style="width: 10px; vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: 600; vertical-align: top; padding: 2px 0;">${driverName}</td></tr>
-                <tr><td style="vertical-align: top; padding: 2px 0;">No. WhatsApp</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="vertical-align: top; padding: 2px 0;">${driverPhone}</td></tr>
-                <tr><td style="vertical-align: top; padding: 2px 0;">No. Polisi</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="vertical-align: top; padding: 2px 0;">${driverVehicle}</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <table style="width: 100%; text-align: left; border-collapse: collapse; margin-bottom: 32px; font-size: 11px; border-top: 2px solid black; border-bottom: 2px solid black;">
-          <thead>
-            <tr style="border-bottom: 2px solid black;">
-              <th style="padding: 10px 8px; font-weight: bold; width: 45%; border-right: 1px solid #cbd5e1; text-align: center;">Deskripsi Jasa</th>
-              <th style="padding: 10px 8px; text-align: center; font-weight: bold; width: 15%; border-right: 1px solid #cbd5e1;">QTY</th>
-              <th style="padding: 10px 8px; text-align: center; font-weight: bold; width: 20%; border-right: 1px solid #cbd5e1;">Tarif</th>
-              <th style="padding: 10px 8px; text-align: center; font-weight: bold; width: 20%;">Sub-Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${isSplitFormat ? `
-              ${shippingFee > 0 ? `
-              <tr style="border-bottom: 1px solid rgba(0,0,0,0.2);">
-                <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">
-                  <div style="font-weight: bold;">Ongkos Kirim</div>
-                  <div style="font-size: 9px; color: #475569; margin-top: 4px;">Antar Jemput (Kendaraan)</div>
-                </td>
-                <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">${qty} ${order.unit || 'KM'}</td>
-                <td style="padding: 12px 8px; text-align: right; vertical-align: top; border-right: 1px solid #cbd5e1;">Rp ${formatCurrency(shippingFee)}</td>
-                <td style="padding: 12px 8px; text-align: right; vertical-align: top;">Rp ${formatCurrency(shippingFee * qty)}</td>
-              </tr>` : ''}
-
-              ${serviceFee > 0 ? `
-              <tr style="border-bottom: 1px solid rgba(0,0,0,0.2);">
-                <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">
-                  <div style="font-weight: bold;">"${order.serviceName}"</div>
-                  ${order.serviceDetails ? `<div style="font-size: 9px; color: #475569; margin-top: 4px; white-space: pre-wrap; line-height: 1.3;">${order.serviceDetails}</div>` : ''}
-                </td>
-                <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">1 Ls</td>
-                <td style="padding: 12px 8px; text-align: right; vertical-align: top; border-right: 1px solid #cbd5e1;">Rp ${formatCurrency(serviceFee)}</td>
-                <td style="padding: 12px 8px; text-align: right; vertical-align: top;">Rp ${formatCurrency(serviceFee)}</td>
-              </tr>` : ''}
-            ` : `
-              <tr style="border-bottom: 1px solid rgba(0,0,0,0.2);">
-                <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">
-                  <div style="font-weight: bold;">"${order.serviceName}"</div>
-                  <div style="font-size: 9px; color: #475569; margin-top: 4px;">Ongkos Kirim / Tarif Jasa</div>
-                  ${order.serviceDetails ? `<div style="font-size: 9px; color: #475569; margin-top: 4px; white-space: pre-wrap; line-height: 1.3;">${order.serviceDetails}</div>` : ''}
-                </td>
-                <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">${qty} ${order.unit || 'Ls'}</td>
-                <td style="padding: 12px 8px; text-align: right; vertical-align: top; border-right: 1px solid #cbd5e1;">Rp ${formatCurrency(subtotalJasa/qty)}</td>
-                <td style="padding: 12px 8px; text-align: right; vertical-align: top;">Rp ${formatCurrency(subtotalJasa)}</td>
-              </tr>
-            `}
-
-            ${shoppingCost > 0 ? `
-            <tr style="border-bottom: 1px solid rgba(0,0,0,0.2);">
-              <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">
-                 <div style="font-weight: bold;">"Barang Belanjaan (Talangan)"</div>
-              </td>
-              <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">1 Ls</td>
-              <td style="padding: 12px 8px; text-align: right; vertical-align: top; border-right: 1px solid #cbd5e1;">Rp ${formatCurrency(shoppingCost)}</td>
-              <td style="padding: 12px 8px; text-align: right; vertical-align: top;">Rp ${formatCurrency(shoppingCost)}</td>
-            </tr>` : ''}
+      // ==========================================
+      // HTML PDF BROWSER PRINT (HD TEXT BASED)
+      // ==========================================
+      const htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Invoice_${order.invoice}</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            @import url('https://fonts.googleapis.com/css2?family=Merriweather:wght@400;700;900&display=swap');
+            @page { size: A4 portrait; margin: 15mm; }
+            body { 
+              font-family: 'Merriweather', Georgia, serif; 
+              color: #0f172a; 
+              margin: 0; 
+              padding: 10px 20px; 
+              font-size: 13px; 
+              -webkit-print-color-adjust: exact; 
+              print-color-adjust: exact;
+            }
+            * { box-sizing: border-box; }
             
-            ${urgentFee > 0 ? `
-            <tr style="border-bottom: 2px solid black;">
-              <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">
-                <div style="font-weight: bold;">Biaya Urgent / Prioritas</div>
-              </td>
-              <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">1 Ls</td>
-              <td style="padding: 12px 8px; text-align: right; vertical-align: top; border-right: 1px solid #cbd5e1;">Rp ${formatCurrency(urgentFee)}</td>
-              <td style="padding: 12px 8px; text-align: right; vertical-align: top;">Rp ${formatCurrency(urgentFee)}</td>
-            </tr>` : ''}
+            /* HEADER */
+            .header-container { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 3px solid #1e3a8a; padding-bottom: 15px; margin-bottom: 25px; }
+            .invoice-title { color: #1e3a8a; font-size: 38px; margin: 0 0 5px 0; font-weight: 900; letter-spacing: 1px; }
+            .company-name { font-size: 16px; font-weight: 800; margin: 0 0 4px 0; color: #000; }
+            .company-info { font-size: 11px; margin: 2px 0; color: #334155; }
+            
+            /* IDENTITY SECTIONS */
+            .info-wrapper { display: flex; justify-content: space-between; margin-bottom: 30px; }
+            .col-left { width: 48%; }
+            .col-right { width: 48%; }
+            
+            .info-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+            .info-table td { padding: 4px 0; vertical-align: top; }
+            .info-table .label { width: 100px; color: #334155; font-weight: 700; }
+            .info-table .colon { width: 15px; font-weight: 700; }
+            .info-table .val { font-weight: 700; color: #000; }
+            
+            .section-header { font-weight: 800; font-size: 14px; color: #000; margin-bottom: 10px; padding-bottom: 4px; border-bottom: 2px solid #e2e8f0; }
+            
+            /* ITEM TABLE */
+            .items-table { width: 100%; border-collapse: collapse; margin-bottom: 40px; }
+            .items-table th { background-color: #f8fafc; color: #000; padding: 12px; text-align: left; border-top: 2px solid #1e3a8a; border-bottom: 2px solid #1e3a8a; font-size: 13px; font-weight: 800; }
+            .items-table th.right, .items-table td.right { text-align: right; }
+            .items-table td { padding: 14px 12px; border-bottom: 1px solid #cbd5e1; color: #0f172a; font-size: 13px; }
+            
+            .item-title { font-weight: 700; color: #000; margin-bottom: 4px; }
+            .item-desc { font-size: 11px; color: #475569; }
+            .item-note { font-size: 11px; color: #64748b; font-style: italic; margin-top: 4px; }
+            
+            .total-row td { padding: 16px 12px; border-bottom: 3px solid #1e3a8a; background-color: #f1f5f9; }
+            .total-label { font-weight: 800; font-size: 14px; color: #000; }
+            .total-value { font-weight: 900; font-size: 18px; color: #1e3a8a; }
+            
+            /* FOOTER PAYMENT */
+            .bottom-container { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 100px; }
+            .payment-box { width: 50%; }
+            .sign-box { width: 45%; text-align: center; }
+            .qris-img { width: 120px; height: 120px; border: 1px solid #cbd5e1; padding: 4px; border-radius: 6px; }
+            
+            /* ABSOLUTE BOTTOM FOOTER */
+            .page-footer { position: fixed; bottom: 0; left: 0; right: 0; text-align: center; font-style: italic; color: #64748b; font-size: 11px; border-top: 1px dashed #cbd5e1; padding-top: 10px; }
+          </style>
+        </head>
+        <body>
+          <div class="header-container">
+            <div>
+              <h1 class="invoice-title">INVOICE</h1>
+              <h2 class="company-name">${companyInfo.name || "Just Call Me - Mas Tulung Mas Kota Malang"}</h2>
+              ${companyInfo.address ? `<p class="company-info">${companyInfo.address}</p>` : ''}
+              ${companyInfo.phone ? `<p class="company-info">No. Telp : ${companyInfo.phone}</p>` : ''}
+            </div>
+            <div>
+              ${companyInfo.logoUrl ? `<img src="${companyInfo.logoUrl}" style="height: 80px; object-fit: contain;" />` : ''}
+            </div>
+          </div>
 
-            <tr style="background-color: #f8fafc;">
-              <td colspan="3" style="padding: 16px 8px; text-align: right; font-weight: bold; font-size: 13px; border-right: 1px solid #cbd5e1;">TOTAL TAGIHAN</td>
-              <td style="padding: 16px 8px; text-align: right; font-weight: 900; font-size: 14px;">Rp ${formatCurrency(currentTotal)}</td>
-            </tr>
-          </tbody>
-        </table>
+          <div class="info-wrapper">
+            <!-- Kolom Kiri -->
+            <div class="col-left">
+              <table class="info-table" style="margin-bottom: 25px;">
+                <tr><td class="label">Nomor Invoice</td><td class="colon">:</td><td class="val" style="color: #1e3a8a;">${order.invoice}</td></tr>
+                <tr><td class="label">Tanggal</td><td class="colon">:</td><td class="val" style="font-weight: 500;">${displayDate}</td></tr>
+              </table>
+              
+              <div class="section-header">Ditagihkan Kepada :</div>
+              <table class="info-table">
+                <tr><td class="label">Nama</td><td class="colon">:</td><td class="val">${order.customerName}</td></tr>
+                <tr><td class="label">No. WhatsApp</td><td class="colon">:</td><td class="val" style="font-weight: 500;">${order.customerPhone}</td></tr>
+                <tr><td class="label">Alamat</td><td class="colon">:</td><td class="val" style="font-weight: 500; line-height: 1.4;">${order.customerAddress || "-"}</td></tr>
+              </table>
+            </div>
 
-        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-top: 32px; padding-top: 8px;">
-          
-          <div style="width: 50%;">
-            ${config.showBank ? `
-              <div>
-                <p style="font-size: 12px; font-weight: bold; text-decoration: underline; text-underline-offset: 4px; margin: 0 0 12px 0;">Pembayaran :</p>
+            <!-- Kolom Kanan -->
+            <div class="col-right">
+              <div class="section-header" style="margin-top: 54px;">Identitas Driver :</div>
+              <table class="info-table">
+                <tr><td class="label">Nama</td><td class="colon">:</td><td class="val">${currentDriverName}</td></tr>
+                <tr><td class="label">No. WhatsApp</td><td class="colon">:</td><td class="val" style="font-weight: 500;">${currentDriverPhone}</td></tr>
+                <tr><td class="label">No. Polisi</td><td class="colon">:</td><td class="val" style="font-weight: 500;">${currentDriverVehicle}</td></tr>
+              </table>
+            </div>
+          </div>
+
+          <table class="items-table">
+            <thead>
+              <tr>
+                <th>Deskripsi Jasa</th>
+                <th class="right" style="width: 180px;">Sub-Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${totalOngkir > 0 ? `
+              <tr>
+                <td>
+                  <div class="item-title">Ongkos Kirim</div>
+                  <div class="item-desc">Jarak Tempuh: ${qty} ${order.unit || 'KM'}</div>
+                </td>
+                <td class="right val">Rp ${formatCurrency(totalOngkir)}</td>
+              </tr>` : ''}
+
+              ${totalJasa > 0 ? `
+              <tr>
+                <td>
+                  <div class="item-title">"${order.serviceName}"</div>
+                  <div class="item-desc">Tarif Jasa Pokok / Tambahan</div>
+                  ${order.serviceDetails ? `<div class="item-note">${order.serviceDetails}</div>` : ''}
+                </td>
+                <td class="right val">Rp ${formatCurrency(totalJasa)}</td>
+              </tr>` : ''}
+
+              ${numTalangan > 0 ? `
+              <tr>
+                <td>
+                  <div class="item-title">"Barang Belanjaan (Talangan)"</div>
+                </td>
+                <td class="right val">Rp ${formatCurrency(numTalangan)}</td>
+              </tr>` : ''}
+              
+              ${urgentFee > 0 ? `
+              <tr>
+                <td>
+                  <div class="item-title">Biaya Urgent / Prioritas</div>
+                </td>
+                <td class="right val">Rp ${formatCurrency(urgentFee)}</td>
+              </tr>` : ''}
+
+              <tr class="total-row">
+                <td class="right total-label">TOTAL TAGIHAN</td>
+                <td class="right total-value">Rp ${formatCurrency(currentTotal)}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="bottom-container">
+            <div class="payment-box">
+              ${config.showBank ? `
+                <div class="section-header" style="text-decoration: underline; border: none; margin-bottom: 15px;">Pembayaran :</div>
                 ${payInfo.banks && Array.isArray(payInfo.banks) ? payInfo.banks.map((bank:any) => `
-                  <table style="width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 12px;">
-                    <tbody>
-                      <tr><td style="width: 80px; vertical-align: top; padding: 2px 0;">Nama Bank</td><td style="width: 10px; vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: bold; vertical-align: top; padding: 2px 0;">${bank.bankName || 'BANK'}</td></tr>
-                      <tr><td style="vertical-align: top; padding: 2px 0;">No. Rekening</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: bold; vertical-align: top; padding: 2px 0;">${bank.accountNumber || '-'}</td></tr>
-                      <tr><td style="vertical-align: top; padding: 2px 0;">Atas Nama</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: bold; vertical-align: top; padding: 2px 0;">${bank.accountName || '-'}</td></tr>
-                    </tbody>
+                  <table class="info-table" style="margin-bottom: 12px; font-size: 11px;">
+                    <tr><td class="label" style="width: 80px; font-weight: 500;">Nama Bank</td><td class="colon">:</td><td class="val">${bank.bankName || 'BANK'}</td></tr>
+                    <tr><td class="label" style="width: 80px; font-weight: 500;">No. Rekening</td><td class="colon">:</td><td class="val">${bank.accountNumber || '-'}</td></tr>
+                    <tr><td class="label" style="width: 80px; font-weight: 500;">Atas Nama</td><td class="colon">:</td><td class="val">${bank.accountName || '-'}</td></tr>
                   </table>
                 `).join('') : ''}
-              </div>
-            ` : ''}
-          </div>
-          
-          <div style="width: 45%; display: flex; flex-direction: column; align-items: center;">
-            ${config.showQris && finalQrisLink !== "" ? `
-              <div style="text-align: center; margin-bottom: 24px;">
-                <p style="font-weight: bold; font-size: 11px; margin: 0 0 6px 0;">Scan QRIS (Otomatis Rp ${formatCurrency(currentTotal)})</p>
-                <div style="border: 1px solid black; padding: 4px; background: white; display: inline-block;">
-                  <img src="${finalQrisLink}" alt="QRIS Dinamis" style="width: 112px; height: 112px;" crossorigin="anonymous" />
-                </div>
-              </div>
-            ` : ''}
+              ` : ''}
+            </div>
             
-            <div style="text-align: center; width: 100%; margin-top: 8px;">
-              <p style="font-size: 11px; margin: 0 0 64px 0;">Hormat Saya,</p>
-              <div style="border-bottom: 1px solid black; display: inline-block; min-width: 150px; padding-bottom: 4px; margin: 0 auto;">
-                <p style="font-size: 12px; font-weight: bold; margin: 0; line-height: 1;">${config.signatureName || "Nama Manajer"}</p>
+            <div class="sign-box">
+              ${config.showQris && finalQrisLink !== "" ? `
+                <div style="margin-bottom: 20px;">
+                  <img src="${finalQrisLink}" alt="QRIS Dinamis" class="qris-img" crossorigin="anonymous" />
+                </div>
+              ` : ''}
+              
+              <div>
+                <p style="margin: 0 0 50px 0; color: #334155; font-size: 12px;">Hormat Saya,</p>
+                <p style="font-weight: 800; font-size: 13px; margin: 0; color: #000; border-bottom: 1px solid #000; display: inline-block; padding-bottom: 2px;">${config.signatureName || "Manajemen MTM"}</p>
+                <p style="font-size: 10px; color: #64748b; margin: 4px 0 0 0;">${config.signatureRole || "Manajemen"}</p>
               </div>
-              <p style="font-size: 10px; color: #334155; margin: 4px 0 0 0;">${config.signatureRole || "Manajemen MTM"}</p>
             </div>
           </div>
-        </div>
 
-        <div style="text-align: center; margin-top: 48px; font-size: 10px; font-style: italic; color: #475569; padding: 0 24px;">
-          "${config.footerNote || ''}"
-        </div>
+          <div class="page-footer">
+            "${config.footerNote || 'Terima kasih telah mempercayakan layanan Anda kepada kami. Harap simpan nota ini sebagai bukti pembayaran yang sah.'}"
+          </div>
+
+          <script>
+            window.onload = function() {
+              setTimeout(function() {
+                window.print();
+              }, 400);
+            }
+          </script>
+        </body>
+        </html>
       `;
 
-      // TAMBAHKAN KE DOM UNTUK DI RENDER
-      const container = document.getElementById("pdf-hidden-container");
-      if (container) {
-        container.appendChild(invoiceElement);
+      // Buka tab baru untuk print
+      const printWindow = window.open('', '_blank');
+      if (printWindow) {
+        printWindow.document.open();
+        printWindow.document.write(htmlContent);
+        printWindow.document.close();
       } else {
-        document.body.appendChild(invoiceElement); 
+        alert("Perhatian: Pop-up diblokir oleh browser Anda. Izinkan pop-up untuk melihat/menyimpan PDF.");
       }
 
-      // RENDER PDF
-      const canvas = await html2canvas(invoiceElement, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
-      const imgData = canvas.toDataURL('image/jpeg', 1.0);
-      const pdf = new jsPDF('p', 'mm', 'a4');
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-      pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
-      pdf.save(`Invoice_${order.invoice}.pdf`);
-
-    } catch (error) {
-      alert("Gagal memproses PDF Invoice.");
-    } finally {
-      // BERSIHKAN ELEMENT
-      const container = document.getElementById("pdf-hidden-container");
-      if (container && invoiceElement && container.contains(invoiceElement)) {
-        container.removeChild(invoiceElement);
-      } else if (invoiceElement && document.body.contains(invoiceElement)) {
-        document.body.removeChild(invoiceElement);
-      }
-      setIsGeneratingPDF(null);
+    } catch (error) { 
+      alert("Gagal memproses PDF Invoice. Pastikan sinyal internet stabil."); 
+    } finally { 
+      setIsGeneratingPDF(null); 
     }
   };
 

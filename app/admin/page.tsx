@@ -14,6 +14,39 @@ const formatCurrency = (amount: number) => {
   return Number(amount).toLocaleString('id-ID', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 };
 
+// =====================================================================
+// FUNGSI PEMBUAT PAYLOAD QRIS DINAMIS
+// =====================================================================
+const generateDynamicQris = (baseNmid: string, amount: number) => {
+  if (!baseNmid || baseNmid.length < 30 || baseNmid.includes("http")) return baseNmid;
+
+  try {
+    const payload = baseNmid.substring(0, baseNmid.length - 4); 
+    const step1 = payload.replace("010211", "010212"); 
+
+    const step2Parts = step1.split("5802ID");
+    if (step2Parts.length < 2) return baseNmid;
+
+    const strAmount = amount.toString();
+    const tag54 = `54${String(strAmount.length).padStart(2, '0')}${strAmount}`;
+    const step3 = `${step2Parts[0]}${tag54}5802ID${step2Parts[1]}`;
+
+    let crc = 0xFFFF;
+    for (let i = 0; i < step3.length; i++) {
+      crc ^= step3.charCodeAt(i) << 8;
+      for (let j = 0; j < 8; j++) {
+        if ((crc & 0x8000) !== 0) crc = (crc << 1) ^ 0x1021;
+        else crc <<= 1;
+      }
+    }
+    const finalCrc = (crc & 0xFFFF).toString(16).toUpperCase().padStart(4, '0');
+    return step3 + finalCrc;
+  } catch (error) {
+    console.error("Gagal parse QRIS:", error);
+    return baseNmid; 
+  }
+};
+
 export default function AdminDashboard() {
   const [isLoaded, setIsLoaded] = useState(false);
   
