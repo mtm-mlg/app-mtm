@@ -12,9 +12,41 @@ import html2canvas from "html2canvas";
 import { db } from "@/lib/firebase";
 import { doc, getDoc, updateDoc, collection, query, where, getDocs } from "firebase/firestore"; 
 
-// HELPER UNTUK MENCEGAH PEMBULATAN (MENAMPILKAN DESIMAL)
 const formatCurrency = (amount: number) => {
   return Number(amount).toLocaleString('id-ID', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+};
+
+// =====================================================================
+// FUNGSI PEMBUAT PAYLOAD QRIS DINAMIS
+// =====================================================================
+const generateDynamicQris = (baseNmid: string, amount: number) => {
+  if (!baseNmid || baseNmid.length < 30 || baseNmid.includes("http")) return baseNmid;
+
+  try {
+    const payload = baseNmid.substring(0, baseNmid.length - 4); 
+    const step1 = payload.replace("010211", "010212"); 
+
+    const step2Parts = step1.split("5802ID");
+    if (step2Parts.length < 2) return baseNmid;
+
+    const strAmount = amount.toString();
+    const tag54 = `54${String(strAmount.length).padStart(2, '0')}${strAmount}`;
+    const step3 = `${step2Parts[0]}${tag54}5802ID${step2Parts[1]}`;
+
+    let crc = 0xFFFF;
+    for (let i = 0; i < step3.length; i++) {
+      crc ^= step3.charCodeAt(i) << 8;
+      for (let j = 0; j < 8; j++) {
+        if ((crc & 0x8000) !== 0) crc = (crc << 1) ^ 0x1021;
+        else crc <<= 1;
+      }
+    }
+    const finalCrc = (crc & 0xFFFF).toString(16).toUpperCase().padStart(4, '0');
+    return step3 + finalCrc;
+  } catch (error) {
+    console.error("Gagal parse QRIS:", error);
+    return baseNmid; 
+  }
 };
 
 export default function DriverDashboard() {
@@ -26,7 +58,6 @@ export default function DriverDashboard() {
   const [driverPhone, setDriverPhone] = useState<string>("");
   const [driverProfileUrl, setDriverProfileUrl] = useState<string>(""); 
   
-  // STATE KEUANGAN
   const [completedCount, setCompletedCount] = useState(0);
   const [dailyRevenue, setDailyRevenue] = useState(0); 
   const [totalReimburse, setTotalReimburse] = useState(0); 
@@ -65,9 +96,6 @@ export default function DriverDashboard() {
     fetchSettings();
   }, []);
 
-  // ========================================================
-  // UPDATE: TOMBOL ONLINE SEKARANG MENGIRIM DATA KE ADMIN
-  // ========================================================
   const toggleOnline = async () => {
     const newStatus = !isOnline;
     setIsOnline(newStatus);
@@ -75,14 +103,13 @@ export default function DriverDashboard() {
       localStorage.setItem(`mtm_online_${driverCode}`, newStatus.toString());
       
       try {
-        // Mencari dokumen driver ini di database dan mengupdate status isOnline-nya
         const q = query(collection(db, "drivers"), where("code", "==", driverCode));
         const querySnapshot = await getDocs(q);
         if (!querySnapshot.empty) {
            const docId = querySnapshot.docs[0].id;
            await updateDoc(doc(db, "drivers", docId), { isOnline: newStatus });
         }
-      } catch(e) { console.error("Gagal sinkronisasi status online ke server:", e) }
+      } catch(e) {}
     }
   };
 
@@ -121,9 +148,7 @@ export default function DriverDashboard() {
 
            setWeatherData({ temp, desc, code });
         }
-      } catch (error) {
-        console.error("Gagal menarik cuaca live:", error);
-      } finally {
+      } catch (error) {} finally {
         setWeatherLoading(false);
       }
     };
@@ -139,9 +164,6 @@ export default function DriverDashboard() {
     }
   }, [isOnline]);
 
-  // ========================================================
-  // RUMUS PERHITUNGAN
-  // ========================================================
   const getSubtotalJasa = (order: any) => {
     const qty = Number(order.quantity) || 1;
     if (order.basePrice) return Number(order.basePrice) * qty; 
@@ -166,7 +188,6 @@ export default function DriverDashboard() {
     
     let pct = 0.15; 
     if (settings && settings.commissions && settings.commissions[tier] !== undefined) {
-       // Catatan: settings.commissions sekarang menyimpan persentase Driver, jadi kita kurangi dari 100
        pct = (100 - Number(settings.commissions[tier])) / 100;
     } else {
        if (tier === 'ringan') pct = 0.16;
@@ -200,15 +221,13 @@ export default function DriverDashboard() {
       if (resultProfile.success) {
         const myProfile = resultProfile.data.find((d: any) => d.code === driverCode);
         if (myProfile) {
-          
           if (myProfile.status === 'suspend') {
-            alert("Akses Ditolak!\nAkun Anda telah DIBEKUKAN oleh Admin. Silakan hubungi pusat operasional.");
+            alert("Akses Ditolak!\nAkun Anda telah DIBEKUKAN oleh Admin.");
             localStorage.removeItem("mtm_user");
             localStorage.removeItem(`mtm_online_${driverCode}`);
             window.location.href = "/";
             return;
           }
-
           setDriverName(myProfile.name);
           setDriverVehicle(myProfile.vehicle || "-");
           setDriverPhone(myProfile.phone || "-");
@@ -260,9 +279,7 @@ export default function DriverDashboard() {
         });
         setShoppingInputs(prev => ({...initialShopping, ...prev}));
       }
-    } catch (error) {
-      console.error("Gagal mengambil data:", error);
-    } finally {
+    } catch (error) {} finally {
       setIsLoadingOrder(false);
     }
   };
@@ -314,9 +331,9 @@ export default function DriverDashboard() {
     return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
   };
 
-  // ========================================================
-  // INVOICE PDF DIUBAH TOTAL MENJADI FORMAT CLASSIC (BOOKMAN)
-  // ========================================================
+  // ============================================================================
+  // FUNGSI INVOICE DENGAN PERBAIKAN BUG PDF KOSONG DAN QRIS DINAMIS
+  // ============================================================================
   const handleGenerateInvoice = async (order: any, sendWa: boolean) => {
     if (!settings) { alert("Sedang memuat pengaturan. Mohon tunggu."); return; }
     
@@ -337,14 +354,26 @@ export default function DriverDashboard() {
       const qty = Number(order.quantity) || 1;
       const subtotalJasa = getSubtotalJasa(order);
       const urgentFee = Number(order.urgentFee) || 0;
+      
+      // INI ADALAH TOTAL YANG AKAN DISISIPKAN KE QRIS
       const currentTotal = subtotalJasa + currentShoppingInput + urgentFee;
 
       const shippingFee = Number(order.shippingFee) || 0;
       const serviceFee = Number(order.serviceFee) || 0;
       const isSplitFormat = shippingFee > 0 || serviceFee > 0;
 
+      // PROSES QRIS DINAMIS
+      let finalQrisLink = "";
+      if (config.showQris && payInfo.qrisUrl) {
+         const theQrisPayload = generateDynamicQris(payInfo.qrisUrl, currentTotal);
+         finalQrisLink = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(theQrisPayload)}`;
+      }
+
       invoiceElement = document.createElement("div");
-      invoiceElement.style.cssText = "position:absolute;left:-9999px;top:-9999px;width:800px;background:white;color:black;font-family:'Bookman Old Style', Georgia, serif;padding:40px;";
+      
+      // PERBAIKAN BUG: Gunakan Z-Index di belakang viewport ketimbang membuangnya ke koordinat -9999px
+      // sehingga html2canvas di perangkat Mobile tetap bisa membacanya sebagai "elemen yang ada".
+      invoiceElement.style.cssText = "position:fixed; top:0; left:0; width:800px; background:white; color:black; font-family:'Bookman Old Style', Georgia, serif; padding:40px; z-index:-1000; opacity: 1; overflow: hidden;";
       
       invoiceElement.innerHTML = `
         ${config.showLogo ? `
@@ -475,18 +504,12 @@ export default function DriverDashboard() {
           </div>
           
           <div style="width: 45%; display: flex; flex-direction: column; align-items: center;">
-            ${config.showQris ? `
+            ${config.showQris && finalQrisLink !== "" ? `
               <div style="text-align: center; margin-bottom: 24px;">
-                <p style="font-weight: bold; font-size: 11px; margin: 0 0 6px 0;">Barcode QRIS</p>
-                ${payInfo.qrisUrl ? `
-                  <div style="border: 1px solid black; padding: 4px; background: white; display: inline-block;">
-                    <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(payInfo.qrisUrl)}" alt="QRIS" style="width: 112px; height: 112px;" crossorigin="anonymous" />
-                  </div>
-                ` : `
-                  <div style="width: 112px; height: 112px; border: 1px solid black; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 10px; color: #94a3b8; background: white;">
-                    <span>(jika ada)</span>
-                  </div>
-                `}
+                <p style="font-weight: bold; font-size: 11px; margin: 0 0 6px 0;">Scan QRIS (Otomatis Rp ${formatCurrency(currentTotal)})</p>
+                <div style="border: 1px solid black; padding: 4px; background: white; display: inline-block;">
+                  <img src="${finalQrisLink}" alt="QRIS Dinamis" style="width: 112px; height: 112px;" crossorigin="anonymous" />
+                </div>
               </div>
             ` : ''}
             
@@ -505,54 +528,46 @@ export default function DriverDashboard() {
         </div>
       `;
 
-      // CARA AMAN MENCEGAH CRASH: MASUKKAN KE DALAM KANDANG (pdf-hidden-container)
-      const container = document.getElementById("pdf-hidden-container");
-      if (container) {
-        container.appendChild(invoiceElement);
-      } else {
-        document.body.appendChild(invoiceElement); 
-      }
+      document.body.appendChild(invoiceElement);
 
-      const canvas = await html2canvas(invoiceElement, { scale: 2, useCORS: true });
+      const canvas = await html2canvas(invoiceElement, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
       const imgData = canvas.toDataURL('image/jpeg', 1.0);
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
       pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
       
-      // MENGIRIM WA DENGAN RINCIAN YANG DIPISAH
       if (sendWa) {
         const waNum = formatWa(order.customerPhone);
         let rincian = "";
         
         if (isSplitFormat) {
-           if (shippingFee > 0) rincian += `*Ongkir:* Rp ${(shippingFee * qty).toLocaleString('id-ID')}\n`;
-           if (serviceFee > 0) rincian += `*Jasa Khusus:* Rp ${(serviceFee * qty).toLocaleString('id-ID')}`;
+           if (shippingFee > 0) rincian += `*Ongkir:* Rp ${formatCurrency(shippingFee * qty)}\n`;
+           if (serviceFee > 0) rincian += `*Jasa Khusus:* Rp ${formatCurrency(serviceFee * qty)}`;
         } else {
-           rincian = `*Ongkir/Jasa:* Rp ${subtotalJasa.toLocaleString('id-ID')}`;
+           rincian = `*Ongkir/Jasa:* Rp ${formatCurrency(subtotalJasa)}`;
         }
 
-        if (currentShoppingInput > 0) rincian += `\n*Talangan:* Rp ${currentShoppingInput.toLocaleString('id-ID')}`;
-        if (urgentFee > 0) rincian += `\n*Urgent:* Rp ${urgentFee.toLocaleString('id-ID')}`;
+        if (currentShoppingInput > 0) rincian += `\n*Talangan:* Rp ${formatCurrency(currentShoppingInput)}`;
+        if (urgentFee > 0) rincian += `\n*Urgent:* Rp ${formatCurrency(urgentFee)}`;
 
-        const pesan = `*INVOICE TAGIHAN MTM*\nYth. ${order.customerName},\n\n*Invoice:* ${order.invoice}\n*Layanan:* ${order.serviceName}\n*Driver:* ${driverName}\n\n${rincian}\n------------------------\n*TOTAL TAGIHAN:* Rp ${currentTotal.toLocaleString('id-ID')}\n\nTerima kasih! 🙏`;
+        const pesan = `*INVOICE TAGIHAN MTM*\nYth. ${order.customerName},\n\n*Invoice:* ${order.invoice}\n*Layanan:* ${order.serviceName}\n*Driver:* ${driverName}\n\n${rincian}\n------------------------\n*TOTAL TAGIHAN:* Rp ${formatCurrency(currentTotal)}\n\nTerima kasih! 🙏`;
         window.open(`https://wa.me/${waNum}?text=${encodeURIComponent(pesan)}`, '_blank');
       } else {
         pdf.save(`Invoice_${order.invoice}.pdf`);
       }
 
-    } catch (error) { alert("Gagal memproses PDF."); } finally { 
-      // PEMBERSIHAN KANDANG (CLEANUP)
-      const container = document.getElementById("pdf-hidden-container");
-      if (container && invoiceElement && container.contains(invoiceElement)) {
-        container.removeChild(invoiceElement);
-      } else if (invoiceElement && document.body.contains(invoiceElement)) {
+    } catch (error) { alert("Gagal memproses PDF Invoice. Pastikan sinyal internet stabil."); } finally { 
+      if (invoiceElement && document.body.contains(invoiceElement)) {
         document.body.removeChild(invoiceElement);
       }
       setGeneratingPDFs(prev => ({...prev, [order.id]: false})); 
     }
   };
 
+  // =====================================================================
+  // FUNGSI SELESAIKAN PEKERJAAN (UPDATE STATUS DRIVER DI-PERBAIKI)
+  // =====================================================================
   const handleOrderStatus = async (order: any, newStatus: string) => {
     const currentShoppingInput = Number(shoppingInputs[order.id]) || 0;
     const currentProofFile = proofFiles[order.id];
@@ -579,15 +594,27 @@ export default function DriverDashboard() {
       const urgentFee = order.urgentFee || 0;
       const newTotalPrice = subtotalJasa + currentShoppingInput + urgentFee;
 
+      // 1. UPDATE PESANAN
       const orderRef = doc(db, "orders", order.id);
       const updateData: any = { status: newStatus, driverCode: driverCode };
+      
       if (newStatus === 'completed') {
          updateData.proofUrl = uploadedProofUrl;
          updateData.shoppingCost = currentShoppingInput;
          updateData.totalPrice = newTotalPrice;
          
-         // Jika order selesai, paksa HP driver ini set status menjadi OFF
-         await updateDoc(doc(db, "drivers", driverCode), { isOnline: false });
+         // 2. PERBAIKAN: CARI DOKUMEN DRIVER BERDASARKAN FIELD 'code'
+         try {
+           const driverQuery = query(collection(db, "drivers"), where("code", "==", driverCode));
+           const driverSnap = await getDocs(driverQuery);
+           if (!driverSnap.empty) {
+              const driverDocId = driverSnap.docs[0].id;
+              await updateDoc(doc(db, "drivers", driverDocId), { isOnline: false });
+           }
+         } catch (driverUpdateError) {
+           console.error("Gagal mengupdate status online driver:", driverUpdateError);
+         }
+         
          setIsOnline(false);
          localStorage.setItem(`mtm_online_${driverCode}`, "false");
       }
@@ -596,7 +623,7 @@ export default function DriverDashboard() {
       
       if (newStatus === 'active') alert("Berhasil Diklaim! Hati-hati di jalan.");
       else if (newStatus === 'completed') {
-        alert(`Tugas Selesai! Tagihan ke pelanggan: Rp ${newTotalPrice.toLocaleString('id-ID')}`);
+        alert(`Tugas Selesai! Tagihan ke pelanggan: Rp ${formatCurrency(newTotalPrice)}`);
         setProofFiles(prev => { const n = {...prev}; delete n[order.id]; return n; });
         setProofPreviews(prev => { const n = {...prev}; delete n[order.id]; return n; });
       }
@@ -657,10 +684,8 @@ export default function DriverDashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         
         <div className="lg:col-span-4 space-y-6">
-          
           <div className="bg-slate-900 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[220px]">
             <div className="absolute -top-10 -right-10 w-32 h-32 bg-blue-500/20 rounded-full blur-2xl"></div>
-            
             <div>
               <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1.5">
                 <Wallet size={14} /> Saldo Jasa (Bersih)
@@ -772,13 +797,31 @@ export default function DriverDashboard() {
                           </div>
                           <h4 className="font-bold text-lg text-slate-800 leading-snug">{order.serviceName}</h4>
                           
-                          {/* JIKA PELANGGAN MENGIRIM GAMBAR / FOTO LAMPIRAN */}
-                          {order.jobImageUrl && (
-                            <div className="mt-3 mb-3 relative rounded-xl overflow-hidden border border-slate-200 shadow-sm">
-                              <div className="bg-slate-800/90 backdrop-blur-sm text-white text-[10px] font-bold px-3 py-1.5 absolute top-0 left-0 rounded-br-lg flex items-center gap-1.5 z-10">
-                                <ImageIcon size={12} /> Lampiran Gambar
+                          {/* JIKA PELANGGAN MENGIRIM BANYAK GAMBAR LAMPIRAN (MULTI-UPLOAD) */}
+                          {order.jobImageUrls && order.jobImageUrls.length > 0 && (
+                            <div className="mt-3 mb-3">
+                              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 flex items-center gap-1">
+                                <ImageIcon size={12} className="text-blue-500" /> Lampiran ({order.jobImageUrls.length})
+                              </span>
+                              <div className="flex overflow-x-auto gap-2 pb-2 snap-x hide-scrollbar">
+                                {order.jobImageUrls.map((imgUrl: string, idx: number) => (
+                                  <a key={idx} href={imgUrl} target="_blank" rel="noopener noreferrer" className="shrink-0 w-32 h-32 relative rounded-xl overflow-hidden border border-slate-200 shadow-sm snap-start hover:opacity-80 transition-opacity">
+                                    <img src={imgUrl} alt={`Lampiran ${idx+1}`} className="w-full h-full object-cover" />
+                                  </a>
+                                ))}
                               </div>
-                              <img src={order.jobImageUrl} alt="Lampiran Pekerjaan" className="w-full h-auto max-h-48 object-cover" />
+                            </div>
+                          )}
+
+                          {/* FALLBACK KOMPATIBILITAS (JIKA PESANAN LAMA HANYA ADA 1 FOTO) */}
+                          {!order.jobImageUrls && order.jobImageUrl && (
+                            <div className="mt-3 mb-3">
+                              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 flex items-center gap-1">
+                                <ImageIcon size={12} className="text-blue-500"/> Lampiran (1)
+                              </span>
+                              <a href={order.jobImageUrl} target="_blank" rel="noopener noreferrer" className="block relative w-32 h-32 rounded-xl overflow-hidden border border-slate-200 shadow-sm hover:opacity-80 transition-opacity">
+                                <img src={order.jobImageUrl} alt="Lampiran Pekerjaan" className="w-full h-full object-cover" />
+                              </a>
                             </div>
                           )}
 
@@ -911,9 +954,6 @@ export default function DriverDashboard() {
 
         </div>
       </div>
-      
-      {/* KANDANG RAHASIA UNTUK PDF (MENCEGAH REACT CRASH) */}
-      <div id="pdf-hidden-container" className="fixed top-[9999px] left-[9999px] invisible pointer-events-none opacity-0"></div>
     </div>
   );
 }

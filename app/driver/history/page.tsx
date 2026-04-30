@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { 
   ClipboardList, Calendar, MapPin, 
   CheckCircle2, XCircle, Search, RefreshCw,
-  FileDown, Trash2, Filter, Wallet, ShieldCheck, Map, ArrowRight,
+  FileDown, Trash2, Filter, Wallet, ShieldCheck, Map,
   ShoppingCart
 } from "lucide-react";
 import jsPDF from "jspdf";
@@ -14,6 +14,39 @@ import { doc, getDoc, updateDoc } from "firebase/firestore";
 // HELPER UNTUK MENCEGAH PEMBULATAN (MENAMPILKAN DESIMAL JIKA ADA)
 const formatCurrency = (amount: number) => {
   return Number(amount).toLocaleString('id-ID', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+};
+
+// =====================================================================
+// FUNGSI PEMBUAT PAYLOAD QRIS DINAMIS
+// =====================================================================
+const generateDynamicQris = (baseNmid: string, amount: number) => {
+  if (!baseNmid || baseNmid.length < 30 || baseNmid.includes("http")) return baseNmid;
+
+  try {
+    const payload = baseNmid.substring(0, baseNmid.length - 4); 
+    const step1 = payload.replace("010211", "010212"); 
+
+    const step2Parts = step1.split("5802ID");
+    if (step2Parts.length < 2) return baseNmid;
+
+    const strAmount = amount.toString();
+    const tag54 = `54${String(strAmount.length).padStart(2, '0')}${strAmount}`;
+    const step3 = `${step2Parts[0]}${tag54}5802ID${step2Parts[1]}`;
+
+    let crc = 0xFFFF;
+    for (let i = 0; i < step3.length; i++) {
+      crc ^= step3.charCodeAt(i) << 8;
+      for (let j = 0; j < 8; j++) {
+        if ((crc & 0x8000) !== 0) crc = (crc << 1) ^ 0x1021;
+        else crc <<= 1;
+      }
+    }
+    const finalCrc = (crc & 0xFFFF).toString(16).toUpperCase().padStart(4, '0');
+    return step3 + finalCrc;
+  } catch (error) {
+    console.error("Gagal parse QRIS:", error);
+    return baseNmid; 
+  }
 };
 
 export default function DriverHistoryPage() {
@@ -62,19 +95,13 @@ export default function DriverHistoryPage() {
 
   useEffect(() => { fetchHistory(); }, [driverCode]);
 
-  const formatTimeSafe = (dateString: any) => {
-    if (!dateString) return "--:--";
-    const date = new Date(dateString);
-    if (isNaN(date.getTime())) return "--:--";
-    return new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit' }).format(date);
-  };
-
-  const formatDateTime = (dateString: any) => {
+  // FORMAT TANGGAL LENGKAP UNTUK KARTU AGAR FILTER TANGGAL TERLIHAT FUNGSINYA
+  const formatDateFull = (dateString: any) => {
     if (!dateString) return "Data Lama";
     const date = new Date(dateString);
     if (isNaN(date.getTime())) return "Data Lama";
-    return new Intl.DateTimeFormat('id-ID', {
-      day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+    return new Intl.DateTimeFormat('id-ID', { 
+      day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' 
     }).format(date);
   };
 
@@ -91,21 +118,18 @@ export default function DriverHistoryPage() {
     return calc > 0 ? calc : total;
   };
 
-  const getUnitPrice = (order: any) => {
-    if (order.basePrice) return Number(order.basePrice);
-    const sub = getSubtotalJasa(order);
-    const qty = Number(order.quantity) || 1;
-    return sub / qty;
-  };
-
   const getOwnerCommission = (order: any, appSettings: any) => {
     if (order.exactOwnerCommission !== undefined) return order.exactOwnerCommission;
     const base = getSubtotalJasa(order); 
     const tier = order.commissionTier?.toLowerCase() || 'sedang';
     
     let pct = 0.15; 
-    if (appSettings && appSettings.commissions && appSettings.commissions[tier] !== undefined) {
-       pct = Number(appSettings.commissions[tier]) / 100;
+    const comms = appSettings?.commissions || appSettings?.commissionTiers;
+
+    if (comms && comms[tier] !== undefined) {
+       // KOREKSI RUMUS: Karena di Settings yang disimpan adalah jatah Driver (Misal 85%), 
+       // maka Owner dapat sisanya (100 - 85 = 15%).
+       pct = (100 - Number(comms[tier])) / 100;
     } else {
        if (tier === 'ringan') pct = 0.16;
        else if (tier === 'sedang') pct = 0.15;
@@ -184,7 +208,7 @@ export default function DriverHistoryPage() {
   };
 
   // ========================================================
-  // PDF GENERATOR UPDATE (BOOKMAN OLD STYLE)
+  // PDF GENERATOR UPDATE (FIX BUG BLANK PUTIH)
   // ========================================================
   const handleGenerateInvoice = async (order: any) => {
     if (!settings) return alert("Menunggu pengaturan, silakan coba lagi...");
@@ -203,8 +227,6 @@ export default function DriverHistoryPage() {
       const currentTotal = subtotalJasa + numTalangan + urgentFee;
       
       const qty = Number(order.quantity) || 1;
-
-      // DETEKSI APAKAH ORDER MENGGUNAKAN FORMAT BARU (DIPISAH) ATAU LAMA
       const shippingFee = Number(order.shippingFee) || 0;
       const serviceFee = Number(order.serviceFee) || 0;
       const isSplitFormat = shippingFee > 0 || serviceFee > 0;
@@ -217,8 +239,19 @@ export default function DriverHistoryPage() {
         ? new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(order.createdAt))
         : new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date());
 
+      // ==========================================
+      // PEMBUATAN LINK QRIS DINAMIS
+      // ==========================================
+      let finalQrisLink = "";
+      if (config.showQris && payInfo.qrisUrl) {
+         const theQrisPayload = generateDynamicQris(payInfo.qrisUrl, currentTotal);
+         finalQrisLink = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(theQrisPayload)}`;
+      }
+
       invoiceElement = document.createElement("div");
-      invoiceElement.style.cssText = "position:absolute;left:-9999px;top:-9999px;width:800px;background:white;color:black;font-family:'Bookman Old Style', Georgia, serif;padding:40px;";
+      
+      // FIX BLANK: Render di background yang pasti ditangkap oleh html2canvas
+      invoiceElement.style.cssText = "position:fixed; top:0; left:0; width:800px; background:white; color:black; font-family:'Bookman Old Style', Georgia, serif; padding:40px; z-index:-9999; opacity: 1; pointer-events: none;";
       
       invoiceElement.innerHTML = `
         ${config.showLogo ? `
@@ -278,7 +311,10 @@ export default function DriverHistoryPage() {
             ${isSplitFormat ? `
               ${shippingFee > 0 ? `
               <tr style="border-bottom: 1px solid rgba(0,0,0,0.2);">
-                <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">Ongkos Kirim</td>
+                <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">
+                  <div style="font-weight: bold;">Ongkos Kirim</div>
+                  <div style="font-size: 9px; color: #475569; margin-top: 4px;">Antar Jemput (Kendaraan)</div>
+                </td>
                 <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">${qty} ${order.unit || 'KM'}</td>
                 <td style="padding: 12px 8px; text-align: right; vertical-align: top; border-right: 1px solid #cbd5e1;">Rp ${formatCurrency(shippingFee)}</td>
                 <td style="padding: 12px 8px; text-align: right; vertical-align: top;">Rp ${formatCurrency(shippingFee * qty)}</td>
@@ -287,17 +323,18 @@ export default function DriverHistoryPage() {
               ${serviceFee > 0 ? `
               <tr style="border-bottom: 1px solid rgba(0,0,0,0.2);">
                 <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">
-                  "${order.serviceName}"
+                  <div style="font-weight: bold;">"${order.serviceName}"</div>
                   ${order.serviceDetails ? `<div style="font-size: 9px; color: #475569; margin-top: 4px; white-space: pre-wrap; line-height: 1.3;">${order.serviceDetails}</div>` : ''}
                 </td>
-                <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">${qty} ${order.unit || 'Ls'}</td>
+                <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">1 Ls</td>
                 <td style="padding: 12px 8px; text-align: right; vertical-align: top; border-right: 1px solid #cbd5e1;">Rp ${formatCurrency(serviceFee)}</td>
-                <td style="padding: 12px 8px; text-align: right; vertical-align: top;">Rp ${formatCurrency(serviceFee * qty)}</td>
+                <td style="padding: 12px 8px; text-align: right; vertical-align: top;">Rp ${formatCurrency(serviceFee)}</td>
               </tr>` : ''}
             ` : `
               <tr style="border-bottom: 1px solid rgba(0,0,0,0.2);">
                 <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">
-                  "${order.serviceName}"
+                  <div style="font-weight: bold;">"${order.serviceName}"</div>
+                  <div style="font-size: 9px; color: #475569; margin-top: 4px;">Ongkos Kirim / Tarif Jasa</div>
                   ${order.serviceDetails ? `<div style="font-size: 9px; color: #475569; margin-top: 4px; white-space: pre-wrap; line-height: 1.3;">${order.serviceDetails}</div>` : ''}
                 </td>
                 <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">${qty} ${order.unit || 'Ls'}</td>
@@ -308,7 +345,9 @@ export default function DriverHistoryPage() {
 
             ${numTalangan > 0 ? `
             <tr style="border-bottom: 1px solid rgba(0,0,0,0.2);">
-              <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">"Barang Belanjaan (Talangan)"</td>
+              <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">
+                 <div style="font-weight: bold;">"Barang Belanjaan (Talangan)"</div>
+              </td>
               <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">1 Ls</td>
               <td style="padding: 12px 8px; text-align: right; vertical-align: top; border-right: 1px solid #cbd5e1;">Rp ${formatCurrency(numTalangan)}</td>
               <td style="padding: 12px 8px; text-align: right; vertical-align: top;">Rp ${formatCurrency(numTalangan)}</td>
@@ -316,15 +355,17 @@ export default function DriverHistoryPage() {
             
             ${urgentFee > 0 ? `
             <tr style="border-bottom: 2px solid black;">
-              <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">Biaya Urgent</td>
+              <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">
+                <div style="font-weight: bold;">Biaya Urgent / Prioritas</div>
+              </td>
               <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">1 Ls</td>
               <td style="padding: 12px 8px; text-align: right; vertical-align: top; border-right: 1px solid #cbd5e1;">Rp ${formatCurrency(urgentFee)}</td>
               <td style="padding: 12px 8px; text-align: right; vertical-align: top;">Rp ${formatCurrency(urgentFee)}</td>
             </tr>` : ''}
 
-            <tr>
-              <td colspan="3" style="padding: 16px 8px; text-align: right; font-weight: bold; font-size: 12px; border-right: 1px solid #cbd5e1;">TOTAL TAGIHAN</td>
-              <td style="padding: 16px 8px; text-align: right; font-weight: 900; font-size: 13px;">Rp ${formatCurrency(currentTotal)}</td>
+            <tr style="background-color: #f8fafc;">
+              <td colspan="3" style="padding: 16px 8px; text-align: right; font-weight: bold; font-size: 13px; border-right: 1px solid #cbd5e1;">TOTAL TAGIHAN</td>
+              <td style="padding: 16px 8px; text-align: right; font-weight: 900; font-size: 14px;">Rp ${formatCurrency(currentTotal)}</td>
             </tr>
           </tbody>
         </table>
@@ -334,13 +375,13 @@ export default function DriverHistoryPage() {
           <div style="width: 50%;">
             ${config.showBank ? `
               <div>
-                <p style="font-weight: bold; font-size: 12px; margin: 0 0 12px 0;">Pembayaran :</p>
+                <p style="font-size: 12px; font-weight: bold; text-decoration: underline; text-underline-offset: 4px; margin: 0 0 12px 0;">Pembayaran :</p>
                 ${payInfo.banks && Array.isArray(payInfo.banks) ? payInfo.banks.map((bank:any) => `
-                  <table style="width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 16px;">
+                  <table style="width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 12px;">
                     <tbody>
-                      <tr><td style="width: 80px; vertical-align: top; padding: 2px 0;">Nama Bank</td><td style="width: 10px; vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: bold; vertical-align: top; padding: 2px 0;">${bank.bankName || "BANK"}</td></tr>
-                      <tr><td style="vertical-align: top; padding: 2px 0;">No. Rekening</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: bold; vertical-align: top; padding: 2px 0;">${bank.accountNumber || "12345"}</td></tr>
-                      <tr><td style="vertical-align: top; padding: 2px 0;">Atas Nama</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: bold; vertical-align: top; padding: 2px 0;">${bank.accountName || "Pemilik"}</td></tr>
+                      <tr><td style="width: 80px; vertical-align: top; padding: 2px 0;">Nama Bank</td><td style="width: 10px; vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: bold; vertical-align: top; padding: 2px 0;">${bank.bankName || 'BANK'}</td></tr>
+                      <tr><td style="vertical-align: top; padding: 2px 0;">No. Rekening</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: bold; vertical-align: top; padding: 2px 0;">${bank.accountNumber || '-'}</td></tr>
+                      <tr><td style="vertical-align: top; padding: 2px 0;">Atas Nama</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: bold; vertical-align: top; padding: 2px 0;">${bank.accountName || '-'}</td></tr>
                     </tbody>
                   </table>
                 `).join('') : ''}
@@ -349,18 +390,12 @@ export default function DriverHistoryPage() {
           </div>
           
           <div style="width: 45%; display: flex; flex-direction: column; align-items: center;">
-            ${config.showQris ? `
+            ${config.showQris && finalQrisLink !== "" ? `
               <div style="text-align: center; margin-bottom: 24px;">
-                <p style="font-weight: bold; font-size: 11px; margin: 0 0 6px 0;">Barcode QRIS</p>
-                ${payInfo.qrisUrl ? `
-                  <div style="border: 1px solid black; padding: 4px; background: white; display: inline-block;">
-                    <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(payInfo.qrisUrl)}" alt="QRIS" style="width: 112px; height: 112px;" crossorigin="anonymous" />
-                  </div>
-                ` : `
-                  <div style="width: 112px; height: 112px; border: 1px solid black; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 10px; color: #94a3b8; background: white;">
-                    <span>(jika ada)</span>
-                  </div>
-                `}
+                <p style="font-weight: bold; font-size: 11px; margin: 0 0 6px 0;">Scan QRIS (Otomatis Rp ${formatCurrency(currentTotal)})</p>
+                <div style="border: 1px solid black; padding: 4px; background: white; display: inline-block;">
+                  <img src="${finalQrisLink}" alt="QRIS Dinamis" style="width: 112px; height: 112px;" crossorigin="anonymous" />
+                </div>
               </div>
             ` : ''}
             
@@ -379,15 +414,13 @@ export default function DriverHistoryPage() {
         </div>
       `;
 
-      // CARA AMAN MENCEGAH CRASH: MASUKKAN KE DALAM KANDANG (pdf-hidden-container)
-      const container = document.getElementById("pdf-hidden-container");
-      if (container) {
-        container.appendChild(invoiceElement);
-      } else {
-        document.body.appendChild(invoiceElement); 
-      }
+      // APPEND KE BODY AGAR RENDER HTML2CANVAS TIDAK BLANK
+      document.body.appendChild(invoiceElement);
 
-      const canvas = await html2canvas(invoiceElement, { scale: 2, useCORS: true });
+      // JEDA 300ms AGAR GAMBAR QR DAN LOGO TERMUAT SEBELUM DIPOTRET
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      const canvas = await html2canvas(invoiceElement, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
       const imgData = canvas.toDataURL('image/jpeg', 1.0);
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth();
@@ -396,13 +429,10 @@ export default function DriverHistoryPage() {
       pdf.save(`Struk_${order.invoice}.pdf`);
 
     } catch (e) { 
-      alert("Gagal memproses PDF Invoice."); 
+      alert("Gagal memproses PDF Invoice. Pastikan koneksi internet stabil."); 
     } finally { 
-      // PEMBERSIHAN KANDANG (CLEANUP)
-      const container = document.getElementById("pdf-hidden-container");
-      if (container && invoiceElement && container.contains(invoiceElement)) {
-        container.removeChild(invoiceElement);
-      } else if (invoiceElement && document.body.contains(invoiceElement)) {
+      // HAPUS ELEMEN DARI BODY AGAR BERSIH
+      if (invoiceElement && document.body.contains(invoiceElement)) {
         document.body.removeChild(invoiceElement);
       }
       setIsGeneratingPDF(null); 
@@ -510,7 +540,9 @@ export default function DriverHistoryPage() {
                       <div className="flex justify-between items-start mb-3 border-b border-slate-100 pb-3">
                         <div className="flex flex-col gap-1.5">
                           <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded uppercase w-max">{order.invoice}</span>
-                          <span className="text-[10px] font-semibold text-slate-400">{formatTimeSafe(order.createdAt)}</span>
+                          
+                          {/* FITUR TANGGAL LENGKAP PADA KARTU AGAR FILTER TANGGAL TERLIHAT BEKERJA */}
+                          <span className="text-[10px] font-semibold text-slate-500">{formatDateFull(order.createdAt)}</span>
                         </div>
                         <span className={`text-[9px] font-bold px-2 py-0.5 rounded border ${order.status === 'completed' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-rose-50 text-rose-600 border-rose-100'}`}>
                           {order.status === 'completed' ? 'SELESAI' : 'BATAL'}
@@ -565,9 +597,6 @@ export default function DriverHistoryPage() {
           ))}
         </div>
       )}
-      
-      {/* KANDANG RAHASIA UNTUK PDF (MENCEGAH REACT CRASH) */}
-      <div id="pdf-hidden-container" className="fixed top-[9999px] left-[9999px] invisible pointer-events-none opacity-0"></div>
     </div>
   );
 }

@@ -14,6 +14,39 @@ const formatCurrency = (amount: number) => {
   return Number(amount).toLocaleString('id-ID', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 };
 
+// =====================================================================
+// FUNGSI PEMBUAT PAYLOAD QRIS DINAMIS
+// =====================================================================
+const generateDynamicQris = (baseNmid: string, amount: number) => {
+  if (!baseNmid || baseNmid.length < 30 || baseNmid.includes("http")) return baseNmid;
+
+  try {
+    const payload = baseNmid.substring(0, baseNmid.length - 4); 
+    const step1 = payload.replace("010211", "010212"); 
+
+    const step2Parts = step1.split("5802ID");
+    if (step2Parts.length < 2) return baseNmid;
+
+    const strAmount = amount.toString();
+    const tag54 = `54${String(strAmount.length).padStart(2, '0')}${strAmount}`;
+    const step3 = `${step2Parts[0]}${tag54}5802ID${step2Parts[1]}`;
+
+    let crc = 0xFFFF;
+    for (let i = 0; i < step3.length; i++) {
+      crc ^= step3.charCodeAt(i) << 8;
+      for (let j = 0; j < 8; j++) {
+        if ((crc & 0x8000) !== 0) crc = (crc << 1) ^ 0x1021;
+        else crc <<= 1;
+      }
+    }
+    const finalCrc = (crc & 0xFFFF).toString(16).toUpperCase().padStart(4, '0');
+    return step3 + finalCrc;
+  } catch (error) {
+    console.error("Gagal parse QRIS:", error);
+    return baseNmid; 
+  }
+};
+
 export default function OrderHistoryPage() {
   const [isLoaded, setIsLoaded] = useState(false);
   
@@ -30,14 +63,19 @@ export default function OrderHistoryPage() {
   const [proofModal, setProofModal] = useState<string | null>(null);
   const [isGeneratingPDF, setIsGeneratingPDF] = useState<string | null>(null);
 
-  const fetchAllData = async () => {
-    setIsLoading(true);
+  // ========================================================
+  // ANTI-CACHE & AUTO-REFRESH SINKRONISASI
+  // ========================================================
+  const fetchAllData = async (showLoading = true) => {
+    if (showLoading) setIsLoading(true);
     try {
-      const resOrders = await fetch("/api/orders");
+      // Menggunakan Timestamp agar Next.js tidak memberikan data Cache lama
+      const timestamp = new Date().getTime();
+      const resOrders = await fetch(`/api/orders?_t=${timestamp}`, { cache: 'no-store' });
       const resultOrders = await resOrders.json();
       if (resultOrders.success) setOrders(resultOrders.data);
 
-      const resDrivers = await fetch("/api/drivers");
+      const resDrivers = await fetch(`/api/drivers?_t=${timestamp}`, { cache: 'no-store' });
       const resultDrivers = await resDrivers.json();
       if (resultDrivers.success) setDrivers(resultDrivers.data);
 
@@ -46,13 +84,16 @@ export default function OrderHistoryPage() {
     } catch (error) {
       console.error("Gagal menarik data:", error);
     } finally {
-      setIsLoading(false);
+      if (showLoading) setIsLoading(false);
     }
   };
 
   useEffect(() => {
     setIsLoaded(true);
-    fetchAllData(); 
+    fetchAllData(true); 
+    // Auto-refresh setiap 10 detik agar status tabel Armada update otomatis!
+    const interval = setInterval(() => fetchAllData(false), 10000);
+    return () => clearInterval(interval);
   }, []);
 
   const formatDateSafe = (dateString: any) => {
@@ -86,7 +127,7 @@ export default function OrderHistoryPage() {
     
     let pct = 0.15; 
     if (appSettings && appSettings.commissions && appSettings.commissions[tier] !== undefined) {
-       pct = Number(appSettings.commissions[tier]) / 100;
+       pct = (100 - Number(appSettings.commissions[tier])) / 100;
     } else {
        if (tier === 'ringan') pct = 0.16;
        else if (tier === 'sedang') pct = 0.15;
@@ -105,7 +146,7 @@ export default function OrderHistoryPage() {
   const getStatusBadge = (status: string) => {
     switch(status) {
       case 'pending': return <span className="px-2 py-1 rounded text-[10px] font-bold uppercase border inline-block bg-amber-50 text-amber-600 border-amber-100">Menunggu</span>;
-      case 'active': return <span className="px-2 py-1 rounded text-[10px] font-bold uppercase border inline-block bg-blue-50 text-blue-600 border-blue-100">Proses</span>;
+      case 'active': return <span className="px-2 py-1 rounded text-[10px] font-bold uppercase border inline-block bg-blue-50 text-blue-600 border-blue-100"><Clock size={10} className="inline mr-1 animate-spin-slow"/>Proses</span>;
       case 'completed': return <span className="px-2 py-1 rounded text-[10px] font-bold uppercase border inline-block bg-emerald-50 text-emerald-600 border-emerald-100">Selesai</span>;
       case 'cancelled': return <span className="px-2 py-1 rounded text-[10px] font-bold uppercase border inline-block bg-rose-50 text-rose-600 border-rose-100">Batal</span>;
       default: return <span className="px-2 py-1 bg-slate-100 text-slate-500 border border-slate-200 rounded text-[10px] uppercase font-bold">{status}</span>;
@@ -118,7 +159,7 @@ export default function OrderHistoryPage() {
       try {
         await updateDoc(doc(db, "orders", orderId), { driverCode: driverCode, status: "active" });
         alert(`Driver ${driverCode} berhasil ditugaskan!`);
-        fetchAllData();
+        fetchAllData(false);
       } catch (error) { alert("Gagal menugaskan driver."); }
     }
   };
@@ -128,7 +169,7 @@ export default function OrderHistoryPage() {
       try {
         await updateDoc(doc(db, "orders", orderId), { status: "cancelled" });
         alert(`Pesanan ${invoiceId} berhasil dibatalkan.`);
-        fetchAllData();
+        fetchAllData(false);
       } catch (error) { alert("Terjadi kesalahan."); }
     }
   };
@@ -138,13 +179,13 @@ export default function OrderHistoryPage() {
       try {
         await deleteDoc(doc(db, "orders", orderId));
         alert(`Pesanan ${invoiceId} berhasil dihapus permanen.`);
-        fetchAllData(); 
+        fetchAllData(false); 
       } catch (error) { alert("Terjadi kesalahan menghapus."); }
     }
   };
 
   // ========================================================
-  // INVOICE PDF DIUBAH TOTAL MENJADI FORMAT CLASSIC (BOOKMAN)
+  // INVOICE PDF MENGGUNAKAN DESAIN BOOKMAN KLASIK (4 BARIS)
   // ========================================================
   const handleGenerateInvoice = async (order: any) => {
     if (!settings) return alert("Sedang memuat pengaturan, mohon klik lagi sebentar lagi...");
@@ -160,7 +201,7 @@ export default function OrderHistoryPage() {
 
       const config = settings.invoiceConfig || {};
       const payInfo = settings.paymentInfo || {};
-      const companyInfo = settings.companyInfo || {}; // Menarik info perusahaan
+      const companyInfo = settings.companyInfo || {}; 
       
       const subtotalJasa = getSubtotalJasa(order);
       const shoppingCost = Number(order.shoppingCost) || 0;
@@ -172,9 +213,19 @@ export default function OrderHistoryPage() {
       const serviceFee = Number(order.serviceFee) || 0;
       const isSplitFormat = shippingFee > 0 || serviceFee > 0;
 
+      // ==========================================
+      // PEMBUATAN LINK QRIS DINAMIS
+      // ==========================================
+      let finalQrisLink = "";
+      if (config.showQris && payInfo.qrisUrl) {
+         const theQrisPayload = generateDynamicQris(payInfo.qrisUrl, currentTotal);
+         finalQrisLink = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(theQrisPayload)}`;
+      }
+
       invoiceElement = document.createElement("div");
-      // MENGGUNAKAN FONT BOOKMAN & WARNA HITAM MURNI UNTUK CETAK
-      invoiceElement.style.cssText = "position:absolute;left:-9999px;top:-9999px;width:800px;background:white;color:black;font-family:'Bookman Old Style', Georgia, serif;padding:40px;";
+      
+      // PERBAIKAN BUG PDF BLANK: Gunakan position fixed z-index negatif agar tidak lari ke luar viewport
+      invoiceElement.style.cssText = "position:fixed; top:0; left:0; width:800px; background:white; color:black; font-family:'Bookman Old Style', Georgia, serif; padding:40px; z-index:-1000; opacity: 1; overflow: hidden;";
       
       invoiceElement.innerHTML = `
         ${config.showLogo ? `
@@ -234,7 +285,10 @@ export default function OrderHistoryPage() {
             ${isSplitFormat ? `
               ${shippingFee > 0 ? `
               <tr style="border-bottom: 1px solid rgba(0,0,0,0.2);">
-                <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">Ongkos Kirim</td>
+                <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">
+                  <div style="font-weight: bold;">Ongkos Kirim</div>
+                  <div style="font-size: 9px; color: #475569; margin-top: 4px;">Antar Jemput (Kendaraan)</div>
+                </td>
                 <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">${qty} ${order.unit || 'KM'}</td>
                 <td style="padding: 12px 8px; text-align: right; vertical-align: top; border-right: 1px solid #cbd5e1;">Rp ${formatCurrency(shippingFee)}</td>
                 <td style="padding: 12px 8px; text-align: right; vertical-align: top;">Rp ${formatCurrency(shippingFee * qty)}</td>
@@ -243,17 +297,18 @@ export default function OrderHistoryPage() {
               ${serviceFee > 0 ? `
               <tr style="border-bottom: 1px solid rgba(0,0,0,0.2);">
                 <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">
-                  "${order.serviceName}"
+                  <div style="font-weight: bold;">"${order.serviceName}"</div>
                   ${order.serviceDetails ? `<div style="font-size: 9px; color: #475569; margin-top: 4px; white-space: pre-wrap; line-height: 1.3;">${order.serviceDetails}</div>` : ''}
                 </td>
-                <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">${qty} ${order.unit || 'Ls'}</td>
+                <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">1 Ls</td>
                 <td style="padding: 12px 8px; text-align: right; vertical-align: top; border-right: 1px solid #cbd5e1;">Rp ${formatCurrency(serviceFee)}</td>
-                <td style="padding: 12px 8px; text-align: right; vertical-align: top;">Rp ${formatCurrency(serviceFee * qty)}</td>
+                <td style="padding: 12px 8px; text-align: right; vertical-align: top;">Rp ${formatCurrency(serviceFee)}</td>
               </tr>` : ''}
             ` : `
               <tr style="border-bottom: 1px solid rgba(0,0,0,0.2);">
                 <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">
-                  "${order.serviceName}"
+                  <div style="font-weight: bold;">"${order.serviceName}"</div>
+                  <div style="font-size: 9px; color: #475569; margin-top: 4px;">Ongkos Kirim / Tarif Jasa</div>
                   ${order.serviceDetails ? `<div style="font-size: 9px; color: #475569; margin-top: 4px; white-space: pre-wrap; line-height: 1.3;">${order.serviceDetails}</div>` : ''}
                 </td>
                 <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">${qty} ${order.unit || 'Ls'}</td>
@@ -264,7 +319,9 @@ export default function OrderHistoryPage() {
 
             ${shoppingCost > 0 ? `
             <tr style="border-bottom: 1px solid rgba(0,0,0,0.2);">
-              <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">"Barang Belanjaan (Talangan)"</td>
+              <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">
+                 <div style="font-weight: bold;">"Barang Belanjaan (Talangan)"</div>
+              </td>
               <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">1 Ls</td>
               <td style="padding: 12px 8px; text-align: right; vertical-align: top; border-right: 1px solid #cbd5e1;">Rp ${formatCurrency(shoppingCost)}</td>
               <td style="padding: 12px 8px; text-align: right; vertical-align: top;">Rp ${formatCurrency(shoppingCost)}</td>
@@ -272,15 +329,17 @@ export default function OrderHistoryPage() {
             
             ${urgentFee > 0 ? `
             <tr style="border-bottom: 2px solid black;">
-              <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">Biaya Urgent</td>
+              <td style="padding: 12px 8px; vertical-align: top; border-right: 1px solid #cbd5e1;">
+                <div style="font-weight: bold;">Biaya Urgent / Prioritas</div>
+              </td>
               <td style="padding: 12px 8px; text-align: center; vertical-align: top; border-right: 1px solid #cbd5e1;">1 Ls</td>
               <td style="padding: 12px 8px; text-align: right; vertical-align: top; border-right: 1px solid #cbd5e1;">Rp ${formatCurrency(urgentFee)}</td>
               <td style="padding: 12px 8px; text-align: right; vertical-align: top;">Rp ${formatCurrency(urgentFee)}</td>
             </tr>` : ''}
 
-            <tr>
-              <td colspan="3" style="padding: 16px 8px; text-align: right; font-weight: bold; font-size: 12px; border-right: 1px solid #cbd5e1;">TOTAL TAGIHAN</td>
-              <td style="padding: 16px 8px; text-align: right; font-weight: 900; font-size: 13px;">Rp ${formatCurrency(currentTotal)}</td>
+            <tr style="background-color: #f8fafc;">
+              <td colspan="3" style="padding: 16px 8px; text-align: right; font-weight: bold; font-size: 13px; border-right: 1px solid #cbd5e1;">TOTAL TAGIHAN</td>
+              <td style="padding: 16px 8px; text-align: right; font-weight: 900; font-size: 14px;">Rp ${formatCurrency(currentTotal)}</td>
             </tr>
           </tbody>
         </table>
@@ -290,13 +349,13 @@ export default function OrderHistoryPage() {
           <div style="width: 50%;">
             ${config.showBank ? `
               <div>
-                <p style="font-weight: bold; font-size: 12px; margin: 0 0 12px 0;">Pembayaran :</p>
+                <p style="font-size: 12px; font-weight: bold; text-decoration: underline; text-underline-offset: 4px; margin: 0 0 12px 0;">Pembayaran :</p>
                 ${payInfo.banks && Array.isArray(payInfo.banks) ? payInfo.banks.map((bank:any) => `
-                  <table style="width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 16px;">
+                  <table style="width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 12px;">
                     <tbody>
-                      <tr><td style="width: 80px; vertical-align: top; padding: 2px 0;">Nama Bank</td><td style="width: 10px; vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: bold; vertical-align: top; padding: 2px 0;">${bank.bankName || "BANK"}</td></tr>
-                      <tr><td style="vertical-align: top; padding: 2px 0;">No. Rekening</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: bold; vertical-align: top; padding: 2px 0;">${bank.accountNumber || "12345"}</td></tr>
-                      <tr><td style="vertical-align: top; padding: 2px 0;">Atas Nama</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: bold; vertical-align: top; padding: 2px 0;">${bank.accountName || "Pemilik"}</td></tr>
+                      <tr><td style="width: 80px; vertical-align: top; padding: 2px 0;">Nama Bank</td><td style="width: 10px; vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: bold; vertical-align: top; padding: 2px 0;">${bank.bankName || 'BANK'}</td></tr>
+                      <tr><td style="vertical-align: top; padding: 2px 0;">No. Rekening</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: bold; vertical-align: top; padding: 2px 0;">${bank.accountNumber || '-'}</td></tr>
+                      <tr><td style="vertical-align: top; padding: 2px 0;">Atas Nama</td><td style="vertical-align: top; padding: 2px 0;">:</td><td style="font-weight: bold; vertical-align: top; padding: 2px 0;">${bank.accountName || '-'}</td></tr>
                     </tbody>
                   </table>
                 `).join('') : ''}
@@ -305,18 +364,12 @@ export default function OrderHistoryPage() {
           </div>
           
           <div style="width: 45%; display: flex; flex-direction: column; align-items: center;">
-            ${config.showQris ? `
+            ${config.showQris && finalQrisLink !== "" ? `
               <div style="text-align: center; margin-bottom: 24px;">
-                <p style="font-weight: bold; font-size: 11px; margin: 0 0 6px 0;">Barcode QRIS</p>
-                ${payInfo.qrisUrl ? `
-                  <div style="border: 1px solid black; padding: 4px; background: white; display: inline-block;">
-                    <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(payInfo.qrisUrl)}" alt="QRIS" style="width: 112px; height: 112px;" crossorigin="anonymous" />
-                  </div>
-                ` : `
-                  <div style="width: 112px; height: 112px; border: 1px solid black; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 10px; color: #94a3b8; background: white;">
-                    <span>(jika ada)</span>
-                  </div>
-                `}
+                <p style="font-weight: bold; font-size: 11px; margin: 0 0 6px 0;">Scan QRIS (Otomatis Rp ${formatCurrency(currentTotal)})</p>
+                <div style="border: 1px solid black; padding: 4px; background: white; display: inline-block;">
+                  <img src="${finalQrisLink}" alt="QRIS Dinamis" style="width: 112px; height: 112px;" crossorigin="anonymous" />
+                </div>
               </div>
             ` : ''}
             
@@ -335,6 +388,7 @@ export default function OrderHistoryPage() {
         </div>
       `;
 
+      // TAMBAHKAN KE DOM UNTUK DI RENDER
       const container = document.getElementById("pdf-hidden-container");
       if (container) {
         container.appendChild(invoiceElement);
@@ -342,7 +396,8 @@ export default function OrderHistoryPage() {
         document.body.appendChild(invoiceElement); 
       }
 
-      const canvas = await html2canvas(invoiceElement, { scale: 2, useCORS: true });
+      // RENDER PDF
+      const canvas = await html2canvas(invoiceElement, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
       const imgData = canvas.toDataURL('image/jpeg', 1.0);
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth();
@@ -353,6 +408,7 @@ export default function OrderHistoryPage() {
     } catch (error) {
       alert("Gagal memproses PDF Invoice.");
     } finally {
+      // BERSIHKAN ELEMENT
       const container = document.getElementById("pdf-hidden-container");
       if (container && invoiceElement && container.contains(invoiceElement)) {
         container.removeChild(invoiceElement);
@@ -395,7 +451,7 @@ export default function OrderHistoryPage() {
       
       const qty = Number(o.quantity) || 1;
       const shippingF = (Number(o.shippingFee) || 0) * qty;
-      const serviceF = (Number(o.serviceFee) || 0) * qty;
+      const serviceF = Number(o.serviceFee) || 0; // Jasa flat tidak dikali qty
 
       const detailAman = o.serviceDetails ? `"${o.serviceDetails.replace(/"/g, '""')}"` : "-";
       const layananAman = o.serviceName ? `"${o.serviceName.replace(/"/g, '""')}"` : "-";
@@ -445,7 +501,7 @@ export default function OrderHistoryPage() {
             <option value="Selesai">Selesai</option>
             <option value="Batal">Batal</option>
           </select>
-          <button onClick={fetchAllData} className="flex items-center gap-1.5 px-3 py-2 border border-blue-200 bg-blue-50 rounded-lg text-[13px] font-medium text-blue-600 hover:bg-blue-100 whitespace-nowrap active:scale-95 transition-all">
+          <button onClick={() => fetchAllData(true)} className="flex items-center gap-1.5 px-3 py-2 border border-blue-200 bg-blue-50 rounded-lg text-[13px] font-medium text-blue-600 hover:bg-blue-100 whitespace-nowrap active:scale-95 transition-all">
              Refresh Data
           </button>
         </div>
@@ -588,8 +644,8 @@ export default function OrderHistoryPage() {
                             )}
                             {serviceFee > 0 && (
                               <div className="flex justify-between">
-                                <span className="text-slate-500">Jasa ({qty}x):</span> 
-                                <span className="text-slate-700 font-medium">Rp {formatCurrency(serviceFee * qty)}</span>
+                                <span className="text-slate-500">Jasa (Flat):</span> 
+                                <span className="text-slate-700 font-medium">Rp {formatCurrency(serviceFee)}</span>
                               </div>
                             )}
                           </>

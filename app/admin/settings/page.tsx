@@ -4,7 +4,8 @@ import {
   Save, Clock, Info, Weight, 
   QrCode, CreditCard, Building, FileText, 
   ToggleRight, ToggleLeft, Eye, Upload, Image as ImageIcon,
-  Plus, Trash2, PenTool, Phone, MapPin, Briefcase
+  Plus, Trash2, PenTool, Phone, MapPin, Briefcase, HelpCircle,
+  Percent
 } from "lucide-react";
 import { db } from "@/lib/firebase";
 import { doc, getDoc, setDoc } from "firebase/firestore";
@@ -22,7 +23,7 @@ export default function SettingsPage() {
     logoUrl: "" 
   });
   
-  // KOMISI DRIVER SEBAGAI ACUAN UTAMA (Sesuai Gambar: 84, 85, 87)
+  // KOMISI DRIVER SEBAGAI ACUAN UTAMA
   const [commissions, setCommissions] = useState({ ringan: 84, sedang: 85, berat: 87 });
   
   const [paymentInfo, setPaymentInfo] = useState({ 
@@ -71,11 +72,12 @@ export default function SettingsPage() {
     } catch (error) { alert("Gagal upload logo."); } finally { setIsUploading(false); }
   };
 
-  // ==========================================
-  // FUNGSI-FUNGSI YANG SEMPAT TERHAPUS (BUG FIX)
-  // ==========================================
   const handleUpdateTier = (tier: 'ringan'|'sedang'|'berat', value: string) => {
-    setCommissions({ ...commissions, [tier]: parseInt(value) || 0 });
+    let val = parseInt(value);
+    if (isNaN(val)) val = 0;
+    if (val > 100) val = 100;
+    if (val < 0) val = 0;
+    setCommissions({ ...commissions, [tier]: val });
   };
   
   const handleQrisChange = (value: string) => {
@@ -105,7 +107,6 @@ export default function SettingsPage() {
     if (field === 'footerNote' || field === 'signatureName' || field === 'signatureRole') return;
     setInvoiceConfig({ ...invoiceConfig, [field]: !invoiceConfig[field as keyof typeof invoiceConfig] });
   };
-  // ==========================================
 
   const handleSave = async () => {
     setIsSaving(true);
@@ -134,76 +135,114 @@ export default function SettingsPage() {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
-        {/* KOLOM KIRI: INPUT DATA */}
         <div className="xl:col-span-6 space-y-6">
           
-          {/* KRITERIA KOMISI - DESAIN PERSIS GAMBAR */}
-          <div className="bg-white rounded-[1.5rem] p-6 shadow-sm border border-blue-200 mb-8 relative">
+          {/* KRITERIA BEBAN KOMISI (VERTIKAL) */}
+          <div className="bg-white rounded-[1.5rem] p-6 shadow-sm border border-slate-200 relative">
             <h3 className="text-xl font-bold text-slate-800 mb-6 border-b border-slate-100 pb-4">
                Kriteria Beban Komisi (Jatah Driver)
             </h3>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            <div className="flex flex-col gap-4">
               
               {/* BEBAN RINGAN */}
-              <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-col gap-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-2.5 rounded-xl bg-emerald-100 text-emerald-600"><Briefcase size={20} /></div>
-                  <h4 className="font-bold text-slate-800 text-sm md:text-base">Beban Ringan</h4>
+              <div className="bg-white rounded-2xl p-4 border border-emerald-100 shadow-[0_2px_10px_rgba(16,185,129,0.05)] flex items-center justify-between transition-shadow hover:shadow-md">
+                <div className="flex items-center gap-4 w-1/3">
+                  <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-100 text-emerald-600"><Briefcase size={20} /></div>
+                  <h4 className="font-bold text-slate-800 text-base">Beban Ringan</h4>
                 </div>
-                <div className="bg-white rounded-xl border border-emerald-100 p-4 flex items-center justify-between shadow-[0_4px_15px_rgba(16,185,129,0.08)]">
-                  <div>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Driver</p>
-                    <div className="flex items-center font-black text-2xl text-emerald-600">
-                      <input type="number" value={commissions.ringan} onChange={(e) => handleUpdateTier('ringan', e.target.value)} className="w-12 bg-transparent border-none outline-none p-0 focus:ring-0 text-left" /> <span className="text-xl">%</span>
+                
+                <div className="flex items-center gap-6 w-2/3 justify-end">
+                  <div className="text-right">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Owner</p>
+                    <div className="font-black text-emerald-600 text-2xl tracking-tight">
+                      <span>{100 - commissions.ringan}</span><span className="text-sm ml-0.5">%</span>
                     </div>
                   </div>
-                  <div className="w-px h-10 bg-slate-100"></div>
-                  <div className="text-right">
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Owner</p>
-                    <span className="font-black text-2xl text-slate-700">{100 - commissions.ringan}<span className="text-xl">%</span></span>
+                  
+                  <div className="w-px h-10 bg-slate-200"></div>
+                  
+                  <div className="text-right min-w-[70px]">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Driver</p>
+                    <div className="flex items-baseline justify-end font-black text-slate-800 text-2xl tracking-tight relative group">
+                      <input 
+                        type="number" 
+                        value={commissions.ringan} 
+                        onChange={(e) => handleUpdateTier('ringan', e.target.value)} 
+                        className="w-10 bg-transparent border-none outline-none p-0 focus:ring-0 text-right appearance-none" 
+                        style={{ MozAppearance: 'textfield' }}
+                      />
+                      <span className="text-sm ml-0.5">%</span>
+                      <div className="absolute -bottom-1 left-0 right-0 h-[2px] bg-slate-200 opacity-0 group-hover:opacity-100 transition-opacity rounded"></div>
+                    </div>
                   </div>
                 </div>
               </div>
 
               {/* BEBAN SEDANG */}
-              <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-col gap-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-2.5 rounded-xl bg-blue-100 text-blue-600"><Briefcase size={20} /></div>
-                  <h4 className="font-bold text-slate-800 text-sm md:text-base">Beban Sedang</h4>
+              <div className="bg-white rounded-2xl p-4 border border-blue-100 shadow-[0_2px_10px_rgba(37,99,235,0.05)] flex items-center justify-between transition-shadow hover:shadow-md">
+                <div className="flex items-center gap-4 w-1/3">
+                  <div className="p-3 rounded-xl bg-blue-50 border border-blue-100 text-blue-600"><Briefcase size={20} /></div>
+                  <h4 className="font-bold text-slate-800 text-base">Beban Sedang</h4>
                 </div>
-                <div className="bg-white rounded-xl border border-blue-100 p-4 flex items-center justify-between shadow-[0_4px_15px_rgba(37,99,235,0.08)]">
-                  <div>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Driver</p>
-                    <div className="flex items-center font-black text-2xl text-blue-600">
-                      <input type="number" value={commissions.sedang} onChange={(e) => handleUpdateTier('sedang', e.target.value)} className="w-12 bg-transparent border-none outline-none p-0 focus:ring-0 text-left" /> <span className="text-xl">%</span>
+                
+                <div className="flex items-center gap-6 w-2/3 justify-end">
+                  <div className="text-right">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Owner</p>
+                    <div className="font-black text-blue-600 text-2xl tracking-tight">
+                      <span>{100 - commissions.sedang}</span><span className="text-sm ml-0.5">%</span>
                     </div>
                   </div>
-                  <div className="w-px h-10 bg-slate-100"></div>
-                  <div className="text-right">
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Owner</p>
-                    <span className="font-black text-2xl text-slate-700">{100 - commissions.sedang}<span className="text-xl">%</span></span>
+                  
+                  <div className="w-px h-10 bg-slate-200"></div>
+                  
+                  <div className="text-right min-w-[70px]">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Driver</p>
+                    <div className="flex items-baseline justify-end font-black text-slate-800 text-2xl tracking-tight relative group">
+                      <input 
+                        type="number" 
+                        value={commissions.sedang} 
+                        onChange={(e) => handleUpdateTier('sedang', e.target.value)} 
+                        className="w-10 bg-transparent border-none outline-none p-0 focus:ring-0 text-right appearance-none" 
+                        style={{ MozAppearance: 'textfield' }}
+                      />
+                      <span className="text-sm ml-0.5">%</span>
+                      <div className="absolute -bottom-1 left-0 right-0 h-[2px] bg-slate-200 opacity-0 group-hover:opacity-100 transition-opacity rounded"></div>
+                    </div>
                   </div>
                 </div>
               </div>
 
               {/* BEBAN BERAT */}
-              <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-col gap-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-2.5 rounded-xl bg-rose-100 text-rose-600"><Briefcase size={20} /></div>
-                  <h4 className="font-bold text-slate-800 text-sm md:text-base">Beban Berat</h4>
+              <div className="bg-white rounded-2xl p-4 border border-rose-100 shadow-[0_2px_10px_rgba(225,29,72,0.05)] flex items-center justify-between transition-shadow hover:shadow-md">
+                <div className="flex items-center gap-4 w-1/3">
+                  <div className="p-3 rounded-xl bg-rose-50 border border-rose-100 text-rose-600"><Briefcase size={20} /></div>
+                  <h4 className="font-bold text-slate-800 text-base">Beban Berat</h4>
                 </div>
-                <div className="bg-white rounded-xl border border-rose-100 p-4 flex items-center justify-between shadow-[0_4px_15px_rgba(225,29,72,0.08)]">
-                  <div>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Driver</p>
-                    <div className="flex items-center font-black text-2xl text-rose-600">
-                      <input type="number" value={commissions.berat} onChange={(e) => handleUpdateTier('berat', e.target.value)} className="w-12 bg-transparent border-none outline-none p-0 focus:ring-0 text-left" /> <span className="text-xl">%</span>
+                
+                <div className="flex items-center gap-6 w-2/3 justify-end">
+                  <div className="text-right">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Owner</p>
+                    <div className="font-black text-rose-600 text-2xl tracking-tight">
+                      <span>{100 - commissions.berat}</span><span className="text-sm ml-0.5">%</span>
                     </div>
                   </div>
-                  <div className="w-px h-10 bg-slate-100"></div>
-                  <div className="text-right">
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Owner</p>
-                    <span className="font-black text-2xl text-slate-700">{100 - commissions.berat}<span className="text-xl">%</span></span>
+                  
+                  <div className="w-px h-10 bg-slate-200"></div>
+                  
+                  <div className="text-right min-w-[70px]">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Driver</p>
+                    <div className="flex items-baseline justify-end font-black text-slate-800 text-2xl tracking-tight relative group">
+                      <input 
+                        type="number" 
+                        value={commissions.berat} 
+                        onChange={(e) => handleUpdateTier('berat', e.target.value)} 
+                        className="w-10 bg-transparent border-none outline-none p-0 focus:ring-0 text-right appearance-none" 
+                        style={{ MozAppearance: 'textfield' }}
+                      />
+                      <span className="text-sm ml-0.5">%</span>
+                      <div className="absolute -bottom-1 left-0 right-0 h-[2px] bg-slate-200 opacity-0 group-hover:opacity-100 transition-opacity rounded"></div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -211,7 +250,6 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* PERUSAHAAN (KOP SURAT) */}
           <div className="bg-white rounded-[1.5rem] p-6 shadow-sm border border-slate-200">
             <h3 className="text-lg font-bold text-slate-800 mb-5 flex items-center gap-2 border-b border-slate-100 pb-3">
               <Building className="text-indigo-600" size={20} /> Identitas Kop Surat (Invoice)
@@ -246,7 +284,6 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* TAMPILAN NOTA & TTD */}
           <div className="bg-white rounded-[1.5rem] p-6 shadow-sm border border-slate-200">
             <h3 className="text-lg font-bold text-slate-800 mb-5 flex items-center gap-2 border-b border-slate-100 pb-3">
               <FileText className="text-amber-600" size={20} /> Visibilitas & Tanda Tangan
@@ -294,19 +331,32 @@ export default function SettingsPage() {
 
         </div>
 
-        {/* KOLOM KANAN: REKENING & LIVE PREVIEW INVOICE */}
         <div className="xl:col-span-6 relative flex flex-col gap-6">
           
-          {/* PEMBAYARAN: QRIS & MULTI REKENING */}
           <div className="bg-white rounded-[1.5rem] p-6 shadow-sm border border-slate-200">
-            <h3 className="text-lg font-bold text-slate-800 mb-5 flex items-center gap-2 border-b border-slate-100 pb-3">
-              <CreditCard className="text-rose-600" size={20} /> Rekening Pembayaran
-            </h3>
+            <div className="flex items-center justify-between mb-5 border-b border-slate-100 pb-3">
+              <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <CreditCard className="text-rose-600" size={20} /> Rekening Pembayaran
+              </h3>
+            </div>
             
             <div className="space-y-6">
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 ml-1 flex items-center gap-1.5"><QrCode size={14}/> Link / ID QRIS Dinamis</label>
-                <input type="text" value={paymentInfo.qrisUrl} onChange={(e) => handleQrisChange(e.target.value)} className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl outline-none focus:border-rose-500 focus:bg-white text-sm font-medium transition-all" />
+              
+              <div className="space-y-2 bg-blue-50/50 p-4 border border-blue-100 rounded-2xl">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-extrabold text-blue-800 flex items-center gap-1.5"><QrCode size={14}/> String QRIS Merchant (Dinamic QR)</label>
+                </div>
+                <textarea 
+                  value={paymentInfo.qrisUrl} 
+                  onChange={(e) => handleQrisChange(e.target.value)} 
+                  placeholder="Paste String Text hasil scan barcode QRIS Merchant Anda di sini (Diawali dengan '000201...')"
+                  rows={4}
+                  className="w-full px-4 py-3 bg-white border border-blue-200 rounded-xl outline-none focus:border-blue-500 text-xs font-mono break-all transition-all shadow-inner resize-none" 
+                />
+                <p className="text-[10px] text-blue-600 font-medium leading-relaxed mt-1 flex gap-1.5">
+                  <HelpCircle size={12} className="shrink-0 mt-0.5" /> 
+                  Untuk fitur Nominal Otomatis, ketik/paste kode mentah (NMID String) dari QRIS Anda. Jangan masukkan link gambar (.jpg). Sistem akan otomatis memasukkan nilai Rupiah tagihan ke dalam Barcode ini saat Struk PDF dicetak.
+                </p>
               </div>
 
               <div className="border-t border-slate-200 pt-4">
@@ -341,14 +391,12 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* LIVE PREVIEW INVOICE (BOOKMAN OLD STYLE) */}
           <div className="bg-slate-100 rounded-[1.5rem] p-4 shadow-inner border border-slate-200">
             <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-4 text-center"><Eye size={16} className="inline mr-2" /> Live Preview Invoice</h3>
             
             <div className="w-full overflow-x-auto pb-4 hide-scrollbar">
               <div className="bg-white p-8 md:p-10 rounded-lg shadow-md text-[11px] text-black min-w-[650px] max-w-[700px] mx-auto" style={{ fontFamily: '"Bookman Old Style", Georgia, serif' }}>
                 
-                {/* HEADER KOP SURAT (DIDESAIN BESAR & MENEMPEL) */}
                 {invoiceConfig.showLogo && (
                   <div className="flex justify-between items-start mb-6 border-b-2 border-black pb-3">
                     <div className="flex-1 pr-4">
@@ -357,7 +405,6 @@ export default function SettingsPage() {
                       {companyInfo.address && <p className="m-0 text-[11px] mt-0.5 leading-tight">{companyInfo.address}</p>}
                       {companyInfo.phone && <p className="m-0 text-[11px] mt-0.5 leading-tight">No. Telp : {companyInfo.phone}</p>}
                     </div>
-                    {/* LOGO DIBUAT BESAR DAN MENEMPEL KE GARIS */}
                     {companyInfo.logoUrl ? (
                       <img src={companyInfo.logoUrl} className="h-20 w-auto object-contain" style={{ marginTop: '-8px', marginBottom: '-10px' }} alt="Logo" />
                     ) : (
@@ -366,7 +413,6 @@ export default function SettingsPage() {
                   </div>
                 )}
 
-                {/* DATA PENAGIHAN & DRIVER */}
                 <div className="flex justify-between items-start mb-8 text-[11px]">
                   <div className="w-[48%]">
                     <p className="font-bold text-[12px] mb-2">Ditagihkan Kepada :</p>
@@ -397,7 +443,6 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
-                {/* TABEL RINCIAN 4 BARIS */}
                 <table className="w-full text-left border-collapse mb-8 text-[11px] border-y-2 border-black">
                   <thead>
                     <tr className="border-b-2 border-black">
@@ -439,10 +484,8 @@ export default function SettingsPage() {
                   </tbody>
                 </table>
 
-                {/* FOOTER: BANK & QRIS+TTD */}
                 <div className="flex justify-between items-start mt-8 pt-2">
                   
-                  {/* KIRI: PEMBAYARAN / BANK */}
                   <div className="w-[50%]">
                     {invoiceConfig.showBank && (
                       <div>
@@ -460,14 +503,14 @@ export default function SettingsPage() {
                     )}
                   </div>
                   
-                  {/* KANAN: QRIS (DI ATAS) DAN TTD (DI BAWAH) */}
                   <div className="w-[45%] flex flex-col items-center">
                     {invoiceConfig.showQris && (
                       <div className="text-center mb-6">
-                        <p className="font-bold text-[11px] mb-2">Barcode Qris</p>
+                        <p className="font-bold text-[11px] mb-2 text-blue-700">Scan QRIS (Auto Nominal)</p>
                         {paymentInfo.qrisUrl ? (
                            <div className="border border-black p-1 bg-white inline-block">
-                             <img src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(paymentInfo.qrisUrl)}`} alt="QRIS" className="w-28 h-28" />
+                             {/* PREVIEW: KITA ANGGAP INI BERISI TOTAL 120.000 */}
+                             <img src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent('https://qris.example')}`} alt="QRIS" className="w-28 h-28 blur-[2px]" title="Barcode Asli Akan Dicetak di PDF" />
                            </div>
                         ) : (
                            <div className="w-28 h-28 border border-black flex flex-col items-center justify-center text-[10px] text-slate-400 bg-white">
@@ -491,7 +534,6 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
-                {/* CATATAN KAKI */}
                 <div className="text-center mt-12 text-[10px] italic px-6">
                   "{invoiceConfig.footerNote}"
                 </div>

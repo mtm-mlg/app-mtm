@@ -5,7 +5,7 @@ import {
   User, MapPin, Package, Clock, Car, 
   ArrowRight, ShieldCheck, Phone, Map, 
   Hammer, Brain, Calculator, Info, Flame, Weight,
-  ShoppingCart, Camera, X, Image as ImageIcon
+  ShoppingCart, Camera, X, Image as ImageIcon, Plus
 } from "lucide-react";
 
 export default function NewOrderPage() {
@@ -39,9 +39,9 @@ export default function NewOrderPage() {
   const [customServiceName, setCustomServiceName] = useState("");
   const [serviceDetails, setServiceDetails] = useState(""); 
   
-  // STATE FOTO DETAIL PEKERJAAN
-  const [jobImageFile, setJobImageFile] = useState<File | null>(null);
-  const [jobImagePreview, setJobImagePreview] = useState<string | null>(null);
+  // STATE MULTIPLE FOTO DETAIL PEKERJAAN
+  const [jobImageFiles, setJobImageFiles] = useState<File[]>([]);
+  const [jobImagePreviews, setJobImagePreviews] = useState<string[]>([]);
 
   // STATE PEMISAHAN TARIF (ONGKIR & JASA)
   const [shippingFee, setShippingFee] = useState<number | "">("");
@@ -90,12 +90,20 @@ export default function NewOrderPage() {
     setCommissionTier(tier);
   };
 
+  // FUNGSI MULTIPLE IMAGE UPLOAD
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      setJobImageFile(file);
-      setJobImagePreview(URL.createObjectURL(file));
+    if (e.target.files && e.target.files.length > 0) {
+      const newFiles = Array.from(e.target.files);
+      const newPreviews = newFiles.map(file => URL.createObjectURL(file));
+      
+      setJobImageFiles(prev => [...prev, ...newFiles]);
+      setJobImagePreviews(prev => [...prev, ...newPreviews]);
     }
+  };
+
+  const removeImage = (indexToRemove: number) => {
+    setJobImageFiles(prev => prev.filter((_, idx) => idx !== indexToRemove));
+    setJobImagePreviews(prev => prev.filter((_, idx) => idx !== indexToRemove));
   };
 
   const handleHitungKM = async (e: React.MouseEvent) => {
@@ -121,12 +129,14 @@ export default function NewOrderPage() {
     }
   };
 
-  // KALKULASI MATEMATIKA YANG SUDAH DIPISAH
   const numShippingFee = Number(shippingFee) || 0;
   const numServiceFee = Number(serviceFee) || 0;
-  const numBasePrice = numShippingFee + numServiceFee; // Gabungan tarif untuk dihitung persentasenya
+  
   const numQty = selectedCategories.includes("Waktu") && unit === "Borongan/Flat" ? 1 : (Number(quantity) || 1);
-  const subtotalJasa = numBasePrice * numQty; 
+  const totalOngkir = numShippingFee * numQty;
+  const totalJasa = numServiceFee;
+  const subtotalJasa = totalOngkir + totalJasa; 
+  const numBasePrice = subtotalJasa / numQty;
   
   const numUrgentFee = isUrgent ? (Number(urgentFee) || 0) : 0;
   const totalHarga = subtotalJasa + numUrgentFee;
@@ -144,21 +154,26 @@ export default function NewOrderPage() {
     setIsSubmitting(true);
 
     try {
-      // 1. Upload Gambar Jika Ada
-      let uploadedImageUrl = null;
-      if (jobImageFile) {
-        const formData = new FormData();
-        formData.append("file", jobImageFile);
-        formData.append("upload_preset", "mtm-mlg");
-        
-        const cloudinaryRes = await fetch(`https://api.cloudinary.com/v1_1/dwprlhbzb/image/upload`, { 
-          method: "POST", 
-          body: formData 
+      // 1. Upload Multiple Images ke Cloudinary (Jika Ada)
+      let uploadedImageUrls: string[] = [];
+      if (jobImageFiles.length > 0) {
+        // Gunakan Promise.all untuk mengunggah semua foto secara paralel
+        const uploadPromises = jobImageFiles.map(async (file) => {
+          const formData = new FormData();
+          formData.append("file", file);
+          formData.append("upload_preset", "mtm-mlg");
+          
+          const cloudinaryRes = await fetch(`https://api.cloudinary.com/v1_1/dwprlhbzb/image/upload`, { 
+            method: "POST", 
+            body: formData 
+          });
+          const cloudinaryData = await cloudinaryRes.json();
+          return cloudinaryData.secure_url; // Kembalikan URL jika berhasil
         });
-        const cloudinaryData = await cloudinaryRes.json();
-        if (cloudinaryData.secure_url) {
-          uploadedImageUrl = cloudinaryData.secure_url;
-        }
+
+        // Tunggu semua proses upload selesai, filter jika ada yang undefined/error
+        const results = await Promise.all(uploadPromises);
+        uploadedImageUrls = results.filter(url => url !== undefined);
       }
 
       const ordersRes = await fetch("/api/orders");
@@ -189,11 +204,13 @@ export default function NewOrderPage() {
         category: selectedCategories.join(", "), 
         serviceName: customServiceName,
         serviceDetails: serviceDetails, 
-        jobImageUrl: uploadedImageUrl, // Gambar lampiran untuk driver
         
-        basePrice: numBasePrice, // Total gabungan ongkir & jasa (untuk backward compatibility)
-        shippingFee: numShippingFee, // Rincian ongkir murni
-        serviceFee: numServiceFee,   // Rincian jasa murni
+        // Simpan dalam bentuk array string
+        jobImageUrls: uploadedImageUrls.length > 0 ? uploadedImageUrls : null, 
+        
+        basePrice: numBasePrice, 
+        shippingFee: numShippingFee, 
+        serviceFee: numServiceFee,   
         
         shoppingCost: 0, 
         unit,
@@ -408,30 +425,37 @@ export default function NewOrderPage() {
                 />
               </div>
 
-              {/* UPLOAD FOTO UNTUK DRIVER */}
+              {/* UPLOAD BANYAK FOTO UNTUK DRIVER */}
               <div className="space-y-1.5 pt-2">
-                <label className="text-xs font-bold text-slate-700 ml-1 flex items-center gap-1.5">
-                  <ImageIcon size={14} className="text-blue-500"/> Lampirkan Foto / Gambar (Opsional)
-                </label>
-                {jobImagePreview ? (
-                  <div className="relative inline-block w-full max-w-sm">
-                    <img src={jobImagePreview} alt="Bukti Lampiran" className="w-full h-40 object-cover rounded-xl border border-slate-300 shadow-sm" />
-                    <button type="button" onClick={() => { setJobImageFile(null); setJobImagePreview(null); }} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1.5 shadow-md hover:bg-rose-600 transition-all">
-                      <X size={14} strokeWidth={3} />
-                    </button>
-                  </div>
-                ) : (
-                  <label className="cursor-pointer bg-white border-2 border-slate-300 border-dashed hover:border-blue-400 hover:bg-blue-50/50 text-slate-500 font-medium py-5 px-4 rounded-xl flex flex-col items-center justify-center transition-colors w-full group">
-                    <div className="bg-slate-50 p-2 rounded-full shadow-sm border border-slate-200 mb-2 group-hover:scale-110 transition-transform">
-                      <Camera size={20} className="text-blue-500" />
-                    </div>
-                    <span className="text-[11px] font-bold text-slate-600">Klik untuk upload foto detail/barang dari pelanggan</span>
-                    <input type="file" accept="image/*" className="hidden" onChange={handleImageChange} />
+                <div className="flex items-center justify-between mb-2 ml-1">
+                  <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <ImageIcon size={14} className="text-blue-500"/> Lampirkan Foto / Gambar (Opsional)
                   </label>
-                )}
+                  <span className="text-[10px] text-slate-500 font-medium bg-slate-200 px-2 py-0.5 rounded-full">{jobImagePreviews.length} Foto Dipilih</span>
+                </div>
+                
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {/* Tampilkan daftar preview gambar */}
+                  {jobImagePreviews.map((preview, index) => (
+                    <div key={index} className="relative aspect-square">
+                      <img src={preview} alt={`Lampiran ${index + 1}`} className="w-full h-full object-cover rounded-xl border border-slate-300 shadow-sm" />
+                      <button type="button" onClick={() => removeImage(index)} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1 shadow-md hover:bg-rose-600 transition-all active:scale-95">
+                        <X size={12} strokeWidth={3} />
+                      </button>
+                    </div>
+                  ))}
+
+                  {/* Tombol Upload (Akan selalu muncul sebagai kotak tambahan) */}
+                  <label className="cursor-pointer bg-white border-2 border-slate-300 border-dashed hover:border-blue-400 hover:bg-blue-50/50 text-slate-500 font-medium rounded-xl flex flex-col items-center justify-center transition-colors aspect-square group">
+                    <div className="bg-slate-50 p-2 rounded-full shadow-sm border border-slate-200 mb-1 group-hover:scale-110 transition-transform">
+                      <Plus size={20} className="text-blue-500" />
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-500 mt-1">Tambah Foto</span>
+                    <input type="file" accept="image/*" multiple className="hidden" onChange={handleImageChange} />
+                  </label>
+                </div>
               </div>
 
-              {/* PEMISAHAN TARIF ONGKIR & JASA */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-3 border-t border-slate-200">
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold text-blue-700 ml-1">Tarif Ongkir (Pengiriman)</label>
@@ -616,20 +640,26 @@ export default function NewOrderPage() {
                 <div className="space-y-2.5 mb-4 border-b border-dashed border-slate-300 pb-4">
                   <div className="flex justify-between items-center">
                     <span className="text-xs font-semibold text-slate-500">Tarif Ongkir ({numQty} {unit})</span>
-                    <span className="text-sm font-bold text-slate-700">Rp {(numShippingFee * numQty).toLocaleString('id-ID')}</span>
+                    <span className="text-sm font-bold text-slate-700">Rp {totalOngkir.toLocaleString('id-ID')}</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-xs font-semibold text-slate-500">Tarif Jasa ({numQty} {unit})</span>
-                    <span className="text-sm font-bold text-slate-700">Rp {(numServiceFee * numQty).toLocaleString('id-ID')}</span>
+                    <span className="text-xs font-semibold text-slate-500">Tarif Jasa (Flat/Tambahan)</span>
+                    <span className="text-sm font-bold text-slate-700">Rp {totalJasa.toLocaleString('id-ID')}</span>
                   </div>
+                  
+                  <div className="flex justify-between items-center pt-2 mt-2 border-t border-slate-200">
+                    <span className="text-xs font-bold text-slate-800">Subtotal Jasa</span>
+                    <span className="text-sm font-black text-slate-800">Rp {subtotalJasa.toLocaleString('id-ID')}</span>
+                  </div>
+
                   {isUrgent && (
-                    <div className="flex justify-between items-center pt-1 border-t border-slate-100">
-                      <span className="text-xs font-semibold text-amber-500 flex items-center gap-1"><Flame size={10} /> Biaya Urgent</span>
-                      <span className="text-sm font-bold text-amber-600">Rp {numUrgentFee.toLocaleString('id-ID')}</span>
+                    <div className="flex justify-between items-center pt-2 mt-1 border-t border-slate-100">
+                      <span className="text-xs font-semibold text-rose-500 flex items-center gap-1"><Flame size={10} /> Biaya Urgent</span>
+                      <span className="text-sm font-bold text-rose-600">Rp {numUrgentFee.toLocaleString('id-ID')}</span>
                     </div>
                   )}
                   {selectedCategories.includes("Belanja") && (
-                    <div className="mt-2 text-[10px] text-rose-500 italic bg-rose-50 p-2 rounded-lg border border-rose-100">
+                    <div className="mt-2 text-[10px] text-amber-600 italic bg-amber-50 p-2 rounded-lg border border-amber-100">
                       *Terdapat barang belanjaan yang estimasi harganya akan ditambahkan oleh driver saat pesanan dikerjakan.
                     </div>
                   )}
@@ -653,7 +683,7 @@ export default function NewOrderPage() {
                 >
                   {isSubmitting ? (
                     <>
-                      <Clock size={18} className="animate-spin" /> Mengunggah Data...
+                      <Clock size={18} className="animate-spin" /> Memproses Data...
                     </>
                   ) : (
                     <>

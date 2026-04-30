@@ -61,6 +61,9 @@ export default function DriverWalletPage() {
     }
   };
 
+  // ========================================================
+  // RUMUS PERHITUNGAN (SINKRON DENGAN SETTINGS ADMIN)
+  // ========================================================
   const getSubtotalJasa = (order: any) => {
     const qty = Number(order.quantity) || 1;
     if (order.basePrice) return Number(order.basePrice) * qty; 
@@ -77,8 +80,12 @@ export default function DriverWalletPage() {
     const tier = order.commissionTier?.toLowerCase() || 'sedang';
     
     let pct = 0.15; 
-    if (appSettings && appSettings.commissions && appSettings.commissions[tier] !== undefined) {
-       pct = Number(appSettings.commissions[tier]) / 100;
+    const comms = appSettings?.commissions || appSettings?.commissionTiers;
+
+    if (comms && comms[tier] !== undefined) {
+       // KOREKSI RUMUS: Karena di Settings yang disimpan adalah jatah Driver (Misal 85%), 
+       // maka Owner dapat sisanya (100 - 85 = 15%).
+       pct = (100 - Number(comms[tier])) / 100;
     } else {
        if (tier === 'ringan') pct = 0.16;
        else if (tier === 'sedang') pct = 0.15;
@@ -91,6 +98,7 @@ export default function DriverWalletPage() {
     const baseJasa = getSubtotalJasa(order);
     const ownerComm = getOwnerCommission(order, appSettings);
     const urgentFee = Number(order.urgentFee) || 0;
+    // Driver otomatis mendapatkan sisanya (100% - Komisi Owner) + Uang Urgent
     return (baseJasa - ownerComm) + urgentFee;
   };
 
@@ -316,7 +324,6 @@ export default function DriverWalletPage() {
     }
   };
 
-  // HYDRATION SAFE RENDER
   if (!isLoaded) return null;
 
   return (

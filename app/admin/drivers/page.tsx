@@ -19,7 +19,7 @@ export default function DriverManagementPage() {
   
   // STATE FILTER
   const [searchTerm, setSearchTerm] = useState("");
-  const [filterDate, setFilterDate] = useState(""); // Filter Tanggal Harian
+  const [filterDate, setFilterDate] = useState(""); 
   
   // STATE RAW DATA (SINGLE SOURCE OF TRUTH)
   const [rawDrivers, setRawDrivers] = useState<any[]>([]);
@@ -43,7 +43,7 @@ export default function DriverManagementPage() {
   const [proofModal, setProofModal] = useState<string | null>(null);
 
   // ========================================================
-  // RUMUS REAL TANPA PEMBULATAN (Owner: 16,15,13 | Driver: 84,85,87)
+  // RUMUS REAL: Menggunakan persentase dinamis dari Settings
   // ========================================================
   const getSubtotalJasa = (order: any) => {
     const qty = Number(order.quantity) || 1;
@@ -60,10 +60,11 @@ export default function DriverManagementPage() {
     const base = getSubtotalJasa(order); 
     const tier = order.commissionTier?.toLowerCase() || 'sedang';
     
-    let pct = 0.15; 
+    let pct = 0.15; // Default fallback jika DB error
     
     if (appSettings && appSettings.commissions && appSettings.commissions[tier] !== undefined) {
-       pct = Number(appSettings.commissions[tier]) / 100;
+       // Karena di Settings yang disimpan adalah jatah Driver (misal 85%), maka Owner dapat sisanya (100 - 85 = 15%)
+       pct = (100 - Number(appSettings.commissions[tier])) / 100;
     } else {
        if (tier === 'ringan') pct = 0.16;
        else if (tier === 'sedang') pct = 0.15;
@@ -95,7 +96,6 @@ export default function DriverManagementPage() {
   const fetchDrivers = async () => {
     setIsLoading(true);
     try {
-      // PENAMBAHAN CACHE: NO-STORE & WAKTU AGAR REAL-TIME
       const timestamp = new Date().getTime();
       const [resDrivers, resOrders, snapWithdraw, snapSettings] = await Promise.all([
         fetch(`/api/drivers?_t=${timestamp}`, { cache: "no-store" }),

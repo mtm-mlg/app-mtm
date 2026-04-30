@@ -3,11 +3,11 @@ import { useState, useEffect } from "react";
 import { 
   Package, Users, Wallet, TrendingUp, TrendingDown, 
   Clock, RefreshCw, CheckCircle2, ArrowRight, CalendarDays,
-  MapPin, ShieldCheck, ChevronRight, Download, Landmark, User, Weight
+  MapPin, ShieldCheck, ChevronRight, Download, Landmark, User, Weight, AlertTriangle
 } from "lucide-react";
 import Link from "next/link";
 import { db } from "@/lib/firebase";
-import { collection, getDocs, addDoc, doc, getDoc } from "firebase/firestore";
+import { collection, getDocs, addDoc, doc, getDoc, deleteDoc } from "firebase/firestore";
 
 // HELPER UNTUK MENCEGAH PEMBULATAN RUPIAH (MENAMPILKAN DESIMAL JIKA ADA)
 const formatCurrency = (amount: number) => {
@@ -29,7 +29,7 @@ export default function AdminDashboard() {
   const [trendGrowth, setTrendGrowth] = useState({ value: "0%", isPositive: true });
 
   // ========================================================
-  // RUMUS REAL TANPA PEMBULATAN (Owner: 16,15,13 | Driver: 84,85,87)
+  // RUMUS REAL TANPA PEMBULATAN (TERKONEKSI KE SETTINGS)
   // ========================================================
   const getSubtotalJasa = (order: any) => {
     const qty = Number(order.quantity) || 1;
@@ -46,14 +46,18 @@ export default function AdminDashboard() {
     const base = getSubtotalJasa(order); 
     const tier = order.commissionTier?.toLowerCase() || 'sedang';
     
-    let pct = 0.15; // Default Sedang 15%
+    let pct = 0.15; // Default fallback 15%
     
-    if (appSettings && appSettings.commissions && appSettings.commissions[tier] !== undefined) {
-       pct = Number(appSettings.commissions[tier]) / 100;
+    const comms = appSettings?.commissions || appSettings?.commissionTiers;
+
+    if (comms && comms[tier] !== undefined) {
+       // PENTING: Karena di Settings yang disimpan adalah jatah Driver (Misal 85%), 
+       // maka Owner dapat sisanya (100 - 85 = 15%).
+       pct = (100 - Number(comms[tier])) / 100;
     } else {
-       if (tier === 'ringan') pct = 0.16;      // Owner 16%
-       else if (tier === 'sedang') pct = 0.15; // Owner 15%
-       else if (tier === 'berat') pct = 0.13;  // Owner 13%
+       if (tier === 'ringan') pct = 0.16;
+       else if (tier === 'sedang') pct = 0.15;
+       else if (tier === 'berat') pct = 0.13;
     }
     
     return base * pct;
@@ -63,7 +67,6 @@ export default function AdminDashboard() {
     const base = getSubtotalJasa(order);
     const ownerComm = getOwnerCommission(order, appSettings);
     const urgent = Number(order.urgentFee) || 0;
-    // Driver otomatis mendapatkan sisanya (100% - Komisi Owner) yaitu 84%, 85%, atau 87% + Uang Urgent
     return (base - ownerComm) + urgent;
   };
 
@@ -87,10 +90,12 @@ export default function AdminDashboard() {
         setSettings(currentSettings);
       }
 
-      const resOrders = await fetch("/api/orders");
+      // NO-CACHE UNTUK MENGAMBIL DATA TERBARU
+      const timestamp = new Date().getTime();
+      const resOrders = await fetch(`/api/orders?_t=${timestamp}`, { cache: "no-store" });
       const resultOrders = await resOrders.json();
       
-      const resDrivers = await fetch("/api/drivers");
+      const resDrivers = await fetch(`/api/drivers?_t=${timestamp}`, { cache: "no-store" });
       const resultDrivers = await resDrivers.json();
 
       const snapWithdraw = await getDocs(collection(db, "withdrawals"));
@@ -151,7 +156,8 @@ export default function AdminDashboard() {
           }
         });
 
-        setOwnerBalance(Math.max(0, totalAllTimeOwnerComm - totalOwnerWithdrawn));
+        // SENGAJA TIDAK DIBATASI MATH.MAX(0) AGAR OWNER BISA MELIHAT JIKA SALDONYA MINUS EFEK BUG
+        setOwnerBalance(totalAllTimeOwnerComm - totalOwnerWithdrawn);
 
         const maxVal = Math.max(...tempTrend.map(t => t.value));
         const finalTrend = tempTrend.map(t => ({
@@ -179,7 +185,7 @@ export default function AdminDashboard() {
         const driversList = resultDrivers.data;
         setTotalDrivers(driversList.length);
         
-        const actives = driversList.filter((d: any) => d.isOnline === true || d.status !== 'suspend');
+        const actives = driversList.filter((d: any) => d.isOnline === true && d.status !== 'suspend');
         setOnlineDrivers(actives.length);
       }
     } catch (error) {
@@ -192,12 +198,13 @@ export default function AdminDashboard() {
   useEffect(() => {
     setIsLoaded(true);
     fetchDashboardData(); 
+    // Auto-refresh 15 detik
     const interval = setInterval(fetchDashboardData, 15000);
     return () => clearInterval(interval);
   }, []);
 
   const handleWithdrawOwner = async () => {
-    if (ownerBalance <= 0) return alert("Saldo Kas Owner sudah Rp 0. Belum ada pemasukan baru.");
+    if (ownerBalance <= 0) return alert("Saldo Kas Owner tidak mencukupi untuk ditarik.");
     if (confirm(`Apakah Anda yakin ingin menarik/mencairkan Saldo Kas Owner sebesar Rp ${formatCurrency(ownerBalance)}?\n\nSaldo di layar akan di-reset (di-Nol-kan).`)) {
       setIsWithdrawing(true);
       try {
@@ -216,9 +223,30 @@ export default function AdminDashboard() {
     }
   };
 
+  // TOMBOL DARURAT UNTUK MERESET EFEK BUG
+  const handleFixNegativeBalance = async () => {
+    if (confirm("Sistem mendeteksi saldo Anda Minus karena Anda sempat melakukan 'Tarik & Reset' saat kalkulator komisi sedang error sebelumnya.\n\nKlik OK untuk MERESET riwayat penarikan Owner, sehingga saldo Anda kembali normal sesuai akumulasi total order asli.")) {
+      setIsWithdrawing(true);
+      try {
+        const snap = await getDocs(collection(db, "withdrawals"));
+        const deletePromises = snap.docs
+          .filter(d => d.data().type === 'owner_withdraw')
+          .map(d => deleteDoc(doc(db, "withdrawals", d.id)));
+        
+        await Promise.all(deletePromises);
+        alert("Koreksi berhasil! Saldo kas telah dipulihkan ke nominal yang sebenarnya.");
+        fetchDashboardData();
+      } catch (error) {
+        alert("Gagal melakukan koreksi.");
+      } finally {
+        setIsWithdrawing(false);
+      }
+    }
+  };
+
   const ordersPending = orders.filter(o => o.status === 'pending');
   const ordersProcessing = orders.filter(o => o.status === 'active');
-  const ordersCompleted = orders.filter(o => o.status === 'completed').slice(0, 10); 
+  const ordersCompleted = orders.filter(o => o.status === 'completed').sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 10); 
 
   const formatTime = (dateString: string) => {
     if (!dateString) return "-";
@@ -253,7 +281,7 @@ export default function AdminDashboard() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mb-8">
         
         {/* KARTU SALDO OWNER */}
-        <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-[1.5rem] p-6 shadow-xl relative overflow-hidden group">
+        <div className={`rounded-[1.5rem] p-6 shadow-xl relative overflow-hidden group ${ownerBalance < 0 ? 'bg-gradient-to-br from-rose-900 to-rose-800' : 'bg-gradient-to-br from-slate-900 to-slate-800'}`}>
           <div className="absolute -right-4 -top-4 w-24 h-24 bg-white/5 rounded-full blur-2xl group-hover:bg-white/10 transition-colors"></div>
           
           <div className="flex justify-between items-start mb-2 relative z-10">
@@ -277,6 +305,14 @@ export default function AdminDashboard() {
               {formatCurrency(ownerBalance)}
             </h4>
           </div>
+
+          {/* TOMBOL DARURAT KOREKSI BUG */}
+          {ownerBalance < 0 && (
+             <div className="absolute bottom-0 left-0 right-0 bg-rose-600/80 backdrop-blur-sm p-2 flex justify-between items-center z-20 animate-in slide-in-from-bottom-5">
+                <span className="text-[9px] text-white font-bold uppercase tracking-widest ml-2 flex items-center gap-1"><AlertTriangle size={10}/> Efek Bug Lama</span>
+                <button onClick={handleFixNegativeBalance} className="text-[9px] bg-white text-rose-700 font-bold px-3 py-1 rounded shadow-sm hover:bg-rose-50 transition-colors active:scale-95">Perbaiki Saldo</button>
+             </div>
+          )}
         </div>
 
         {/* KARTU PESANAN */}
